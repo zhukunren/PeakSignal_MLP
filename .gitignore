@@ -1,0 +1,38 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Local market data and derived training data
+*.csv
+!sample_data/*.csv
+
+# Model artifacts and generated reports
+*.pkl
+*.joblib
+*.npz
+*.html
+*.log
+*_result.json
+*_report.json
+
+# Training caches
+*_cache/
+fixed_feature_*_combo_cache/
+fixed_feature_combo_cache/
+
+# Streamlit local state
+.streamlit/secrets.toml

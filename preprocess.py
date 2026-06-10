@@ -5,6 +5,7 @@ import pandas as pd
 from itertools import combinations
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
+from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 
@@ -61,14 +62,17 @@ def pca_reduction(data, features, max_components=100):
     print(f"PCA降维后生成 {n_components} 个特征。")
     return pca_feature_names
 
+
 def preprocess_data(
     data: pd.DataFrame,
     N: int,
     mixture_depth: int,
     mark_labels: bool = True,
     min_features_to_select: int = 10,
-    max_features_for_mixture: int = 50
+    selected_func_names=None,
+    selected_system=None,
 ):
+    import torch
     """
     完整的特征工程示例:
       1) 数据排序 & 设置索引
@@ -96,6 +100,9 @@ def preprocess_data(
     print("开始预处理数据...")
     # (A) 对数据做排序、索引
     print("开始预处理数据...")
+    selected_func_names = [] if selected_func_names is None else list(selected_func_names)
+    selected_system = [] if selected_system is None else list(selected_system)
+
     data = data.sort_values('TradeDate').copy()
     data.index = pd.to_datetime(data['TradeDate'], format='%Y%m%d')
     
@@ -103,6 +110,7 @@ def preprocess_data(
     data['MA_5'] = data['Close'].rolling(window=5).mean()
     data['MA_20'] = data['Close'].rolling(window=20).mean()
     data['MA_50'] = data['Close'].rolling(window=50).mean()
+    data['MA_60'] = data['Close'].rolling(window=60).mean()
     data['MA_200'] = data['Close'].rolling(window=200).mean()
     data['EMA_5'] = data['Close'].ewm(span=5, adjust=False).mean()
     data['EMA_20'] = data['Close'].ewm(span=20, adjust=False).mean()
@@ -138,6 +146,58 @@ def preprocess_data(
         data['MFI_14'] = np.nan
         data['CMF_20'] = np.nan
         data['Chaikin_Osc'] = np.nan
+
+    # 累计量/价格水平类指标用滚动或比例表达，降低起始点和市场点位漂移影响。
+    data['Close_MA200_Diff'] = data['Close'] / data['MA_200'].replace(0, np.nan) - 1
+    data['Close_VWAP_Diff'] = data['Close'] / data['VWAP'].replace(0, np.nan) - 1
+    data['Close_EMA20_Diff'] = data['Close'] / data['EMA_20'].replace(0, np.nan) - 1
+    data['MA20_MA50_Diff_Pct'] = data['MA_20'] / data['MA_50'].replace(0, np.nan) - 1
+    data['MA20_MA60_Diff_Pct'] = data['MA_20'] / data['MA_60'].replace(0, np.nan) - 1
+    data['MA50_MA200_Diff_Pct'] = data['MA_50'] / data['MA_200'].replace(0, np.nan) - 1
+    data['MA60_MA200_Diff_Pct'] = data['MA_60'] / data['MA_200'].replace(0, np.nan) - 1
+    data['Close_MA60_Diff'] = data['Close'] / data['MA_60'].replace(0, np.nan) - 1
+    data['Trend_Bull_20_60_200'] = ((data['MA_20'] > data['MA_60']) & (data['MA_60'] > data['MA_200'])).astype(int)
+    data['Trend_Bear_20_60_200'] = ((data['MA_20'] < data['MA_60']) & (data['MA_60'] < data['MA_200'])).astype(int)
+    data['Trend_Regime_Score'] = (
+        np.sign(data['Close_MA200_Diff'].fillna(0))
+        + np.sign(data['MA20_MA60_Diff_Pct'].fillna(0))
+        + np.sign(data['MA60_MA200_Diff_Pct'].fillna(0))
+    )
+    data['Trend_Regime_Change'] = data['Trend_Regime_Score'].diff()
+    if 'Volume' in data.columns:
+        typical_price = (data['High'] + data['Low'] + data['Close']) / 3
+        rolling_volume_250 = data['Volume'].rolling(window=250, min_periods=20).sum()
+        data['Rolling_VWAP_250'] = (
+            (typical_price * data['Volume']).rolling(window=250, min_periods=20).sum()
+            / rolling_volume_250.replace(0, np.nan)
+        )
+        data['Close_RollingVWAP250_Diff'] = data['Close'] / data['Rolling_VWAP_250'].replace(0, np.nan) - 1
+        for window in (20, 60, 250):
+            volume_sum = data['Volume'].rolling(window=window, min_periods=max(5, window // 5)).sum()
+            obv_change = data['OBV'].diff(window)
+            data[f'OBV_Change_{window}'] = obv_change
+            data[f'OBV_Ratio_{window}'] = obv_change / volume_sum.replace(0, np.nan)
+        data['Volume_Ratio_20'] = data['Volume'] / data['Volume'].rolling(window=20, min_periods=5).mean().replace(0, np.nan) - 1
+        data['Volume_Ratio_60'] = data['Volume'] / data['Volume'].rolling(window=60, min_periods=10).mean().replace(0, np.nan) - 1
+        data['Volume_Ratio_250'] = data['Volume'] / data['Volume'].rolling(window=250, min_periods=20).mean().replace(0, np.nan) - 1
+        data['Chaikin_Osc_Ratio'] = data['Chaikin_Osc'] / data['Volume'].rolling(window=20, min_periods=5).mean().replace(0, np.nan)
+    else:
+        data['Rolling_VWAP_250'] = np.nan
+        data['Close_RollingVWAP250_Diff'] = np.nan
+        for window in (20, 60, 250):
+            data[f'OBV_Change_{window}'] = np.nan
+            data[f'OBV_Ratio_{window}'] = np.nan
+        data['Volume_Ratio_20'] = np.nan
+        data['Volume_Ratio_60'] = np.nan
+        data['Volume_Ratio_250'] = np.nan
+        data['Chaikin_Osc_Ratio'] = np.nan
+
+    if 'Amount' in data.columns:
+        data['Amount_Ratio_20'] = data['Amount'] / data['Amount'].rolling(window=20, min_periods=5).mean().replace(0, np.nan) - 1
+        data['Amount_Ratio_60'] = data['Amount'] / data['Amount'].rolling(window=60, min_periods=10).mean().replace(0, np.nan) - 1
+    else:
+        data['Amount_Ratio_20'] = np.nan
+        data['Amount_Ratio_60'] = np.nan
         
     data['CCI_20'] = compute_CCI(data['High'], data['Low'], data['Close'], period=20)
     data['Williams_%R_14'] = compute_williams_r(data['High'], data['Low'], data['Close'], period=14)
@@ -150,10 +210,67 @@ def preprocess_data(
     data['Ultimate_Osc'] = compute_ultimate_oscillator(data['High'], data['Low'], data['Close'], short_period=7, medium_period=14, long_period=28)
     data['PPO'] = compute_PPO(data['Close'], fast_period=12, slow_period=26)
     data['DPO_20'] = compute_DPO(data['Close'], period=20)
+    data['DPO_20_Pct'] = data['DPO_20'] / data['Close'].replace(0, np.nan)
     data['KST'], data['KST_signal'] = compute_KST(data['Close'], r1=10, r2=15, r3=20, r4=30, sma1=10, sma2=10, sma3=10, sma4=15)
     data['KAMA_10'] = compute_KAMA(data['Close'], n=10, pow1=2, pow2=30)
     data['Seasonality'] = np.sin(2 * np.pi * data.index.dayofyear / 365)
     data['one'] = 1
+
+    for window in (5, 20, 60, 120, 250):
+        data[f'Return_{window}'] = data['Close'].pct_change(window)
+        rolling_high = data['High'].rolling(window=window, min_periods=max(5, window // 5)).max()
+        rolling_low = data['Low'].rolling(window=window, min_periods=max(5, window // 5)).min()
+        data[f'Price_Position_{window}'] = (
+            (data['Close'] - rolling_low) / (rolling_high - rolling_low).replace(0, np.nan)
+        )
+        data[f'Drawdown_{window}'] = data['Close'] / rolling_high.replace(0, np.nan) - 1
+
+        if window in (20, 60):
+            prev_high = rolling_high.shift(1)
+            prev_low = rolling_low.shift(1)
+            data[f'New_High_{window}'] = (data['High'] >= prev_high).astype(int)
+            data[f'New_Low_{window}'] = (data['Low'] <= prev_low).astype(int)
+            data[f'Close_From_Low_{window}'] = data['Close'] / rolling_low.replace(0, np.nan) - 1
+            data[f'High_From_Close_{window}'] = data['High'] / data['Close'].replace(0, np.nan) - 1
+            data[f'Low_From_Close_{window}'] = data['Low'] / data['Close'].replace(0, np.nan) - 1
+            data[f'Bars_Since_High_{window}'] = (
+                window - 1 - data['High'].rolling(window=window, min_periods=max(5, window // 5))
+                .apply(np.argmax, raw=True)
+            ) / window
+            data[f'Bars_Since_Low_{window}'] = (
+                window - 1 - data['Low'].rolling(window=window, min_periods=max(5, window // 5))
+                .apply(np.argmin, raw=True)
+            ) / window
+
+    def rolling_zscore(series, window, min_periods):
+        rolling_mean = series.rolling(window=window, min_periods=min_periods).mean()
+        rolling_std = series.rolling(window=window, min_periods=min_periods).std()
+        return (series - rolling_mean) / rolling_std.replace(0, np.nan)
+
+    data['Volatility_20'] = compute_volatility(data['Close'], period=20)
+    data['Volatility_60'] = compute_volatility(data['Close'], period=60)
+    data['Volatility_Ratio_20_60'] = data['Volatility_20'] / data['Volatility_60'].replace(0, np.nan)
+    data['ATR_14_Pct'] = data['ATR_14'] / data['Close'].replace(0, np.nan)
+    data['HL_Range_Pct'] = (data['High'] - data['Low']) / data['Close'].replace(0, np.nan)
+    data['Body_Pct'] = (data['Close'] - data['Open']) / data['Open'].replace(0, np.nan)
+    data['Upper_Shadow_Pct'] = (data['High'] - data[['Open', 'Close']].max(axis=1)) / data['Close'].replace(0, np.nan)
+    data['Lower_Shadow_Pct'] = (data[['Open', 'Close']].min(axis=1) - data['Low']) / data['Close'].replace(0, np.nan)
+    data['Gap_Pct'] = data['Open'] / data['Close'].shift(1).replace(0, np.nan) - 1
+    candle_range = (data['High'] - data['Low']).replace(0, np.nan)
+    data['Candle_Close_Position'] = (data['Close'] - data['Low']) / candle_range
+    data['Return_5_20_Diff'] = data['Return_5'] - data['Return_20']
+    data['Return_20_60_Diff'] = data['Return_20'] - data['Return_60']
+    data['Return_20_Z_250'] = rolling_zscore(data['Return_20'], 250, 60)
+    data['Return_60_Z_250'] = rolling_zscore(data['Return_60'], 250, 60)
+    data['Drawdown_60_Z_250'] = rolling_zscore(data['Drawdown_60'], 250, 60)
+    data['Volatility_20_Z_250'] = rolling_zscore(data['Volatility_20'], 250, 60)
+    data['Bollinger_Width_Ratio_120'] = data['Bollinger_Width'] / data['Bollinger_Width'].rolling(window=120, min_periods=20).mean().replace(0, np.nan) - 1
+    data['ATR_14_Ratio_60'] = data['ATR_14_Pct'] / data['ATR_14_Pct'].rolling(window=60, min_periods=10).mean().replace(0, np.nan) - 1
+    data['RSI_14_Slope_5'] = data['RSI_14'].diff(5)
+    data['RSI_14_Z_120'] = rolling_zscore(data['RSI_14'], 120, 20)
+    data['Price_Position_20_60_Diff'] = data['Price_Position_20'] - data['Price_Position_60']
+    data['Price_Position_60_250_Diff'] = data['Price_Position_60'] - data['Price_Position_250']
+    data['Drawdown_20_60_Diff'] = data['Drawdown_20'] - data['Drawdown_60']
 
     # ----------------- 新增更多样化特征 -----------------
     data['SMA_10'] = compute_SMA(data['Close'], window=10)
@@ -216,14 +333,20 @@ def preprocess_data(
     
     print("构建基础因子...")
     data['Close_MA5_Diff'] = data['Close'] - data['MA_5']
+    data['Close_MA5_Diff_Pct'] = data['Close'] / data['MA_5'].replace(0, np.nan) - 1
     data['Pch'] = data['Close'] / data['Close'].shift(1) - 1
     data['MA5_MA20_Diff'] = data['MA_5'] - data['MA_20']
+    data['MA5_MA20_Diff_Pct'] = data['MA_5'] / data['MA_20'].replace(0, np.nan) - 1
+    data['Slope_MA5_Pct'] = data['MA_5'].pct_change()
     data['RSI_Signal'] = data['RSI_14'] - 50
     data['MACD_Diff'] = data['MACD'] - data['MACD_signal']
+    data['MACD_Diff_Pct'] = data['MACD_Diff'] / data['Close'].replace(0, np.nan)
+    data['MACD_Diff_Pct_Change'] = data['MACD_Diff_Pct'].diff()
     band_range = (data['UpperBand'] - data['LowerBand']).replace(0, np.nan)
     data['Bollinger_Position'] = (data['Close'] - data['MiddleBand']) / band_range
     data['Bollinger_Position'] = data['Bollinger_Position'].fillna(0)
     data['K_D_Diff'] = data['K'] - data['D']
+    data['K_D_Diff_Change'] = data['K_D_Diff'].diff()
 
     # ------------- 新增扩展指标（新增的指标函数调用） -------------
     data['MACD_Hist'] = compute_MACD_histogram(data['Close'])
@@ -244,70 +367,78 @@ def preprocess_data(
     data['Fisher'] = compute_fisher_transform(data['Close'], period=10)
     data['CMO_14'] = compute_CMO(data['Close'], period=14)
 
-    # 计算 VWAP 和 VWAP 偏离指标
-    #data['VWAP'] = compute_VWAP(data['High'], data['Low'], data['Close'], data['Volume'])
-    data['VWAP_deviation'] = compute_VWAP_deviation(data['High'], data['Low'], data['Close'], data['Volume'])
-
-    # 计算 OBV 指标
-    #data['OBV'] = compute_OBV(data['Close'], data['Volume'])
-    # 计算 OBV 的移动平均（例如20日均线）和 OBV 交叉信号
-    obv, obv_ma = compute_OBV_MA(data['Close'], data['Volume'], ma_period=20)
-    data['OBV_MA'] = obv_ma
-    data['OBV_cross'] = compute_OBV_cross_signal(data['Close'], data['Volume'], ma_period=20)
-    # 计算 OBV 与收盘价的滚动相关系数（背离指标）
-    data['OBV_divergence'] = compute_OBV_divergence(data['Close'], data['Volume'], window=20)
-
-    # 计算 累积分布线（A/D Line）
-    data['AD'] = compute_AD(data['High'], data['Low'], data['Close'], data['Volume'])
-
-    # 计算 查金振荡器（Chaikin Oscillator）
-    data['Chaikin_Osc'] = compute_chaikin_oscillator(data['High'], data['Low'], data['Close'], data['Volume'], short_period=3, long_period=10)
-
-    # 计算 资金流指数（MFI），这里取14日周期
-    data['MFI_14'] = compute_MFI(data['High'], data['Low'], data['Close'], data['Volume'], period=14)
-
-    # 计算 成交量价格趋势 (VPT)
-    data['VPT'] = compute_VPT(data['Close'], data['Volume'])
-
-    # 计算 易动指标 (EOM)，这里取14日周期
-    data['EOM'] = compute_EOM(data['High'], data['Low'], data['Volume'], period=14)
-
+    # ------------------ 6) 检查关键列 ------------------
+    required_cols = [
+        'Close_MA5_Diff', 'MA5_MA20_Diff', 'RSI_Signal', 'MACD_Diff',
+        'Bollinger_Position', 'K_D_Diff'
+    ]
+    for col in required_cols:
+        if col not in data.columns:
+            raise ValueError(f"列 {col} 未被创建，请检查数据和计算步骤。")
     # ------------------ 6) 构建基础因子 base_features 列表 ------------------
     print("构建基础因子列表 base_features...")
- 
     base_features = [
-        'Close_MA5_Diff', 'MA5_MA20_Diff', 'RSI_Signal', 'MACD_Diff',
+        'Close_MA5_Diff_Pct', 'MA5_MA20_Diff_Pct', 'RSI_Signal', 'MACD_Diff_Pct',
         'Bollinger_Position', 'K_D_Diff', 'ConsecutiveUp', 'ConsecutiveDown',
-        'Cross_MA5_Count', 'Volume_Spike_Count', 'one', 'Close', 'Pch','CCI_20',
-        'Williams_%R_14',  'OBV','VWAP', 'ZScore_20', 'Plus_DI', 'Minus_DI',
-        'ADX_14','Bollinger_Width', 'Slope_MA5', 'Volume_Change',
+        'Cross_MA5_Count', 'Volume_Spike_Count', 'one', 'Pch','CCI_20',
+        'Williams_%R_14', 'ZScore_20', 'Plus_DI', 'Minus_DI',
+        'ADX_14','Bollinger_Width', 'Slope_MA5_Pct', 'Volume_Change',
         'Price_Mean_Diff','High_Mean_Diff','Low_Mean_Diff',
-        #'MA_5','MA_20','MA_50','MA_200','EMA_5','EMA_20',
-        'MFI_14','CMF_20','TRIX_15','Ultimate_Osc','Chaikin_Osc','PPO',
-        'DPO_20','KST','KST_signal','KAMA_10'
+        'Price_MA20_Diff', 'Close_MA200_Diff', 'Close_VWAP_Diff',
+        'Close_EMA20_Diff', 'MA20_MA50_Diff_Pct', 'MA50_MA200_Diff_Pct',
+        'Close_RollingVWAP250_Diff', 'OBV_Ratio_20', 'OBV_Ratio_60',
+        'OBV_Ratio_250', 'Volume_Ratio_20', 'Volume_Ratio_60',
+        'Chaikin_Osc_Ratio', 'MFI_14','CMF_20','TRIX_15','Ultimate_Osc','PPO',
+        'DPO_20_Pct','KST','KST_signal',
+        'Return_5', 'Return_20', 'Return_60', 'Return_120', 'Return_250',
+        'Price_Position_5', 'Price_Position_20', 'Price_Position_60',
+        'Price_Position_120', 'Price_Position_250',
+        'Drawdown_5', 'Drawdown_20', 'Drawdown_60', 'Drawdown_120', 'Drawdown_250',
+        'Volatility_Ratio_20_60', 'ATR_14_Pct', 'HL_Range_Pct',
+        'Body_Pct', 'Upper_Shadow_Pct', 'Lower_Shadow_Pct', 'Gap_Pct'
     ]
+
+    # ★ 将 generate_features 里新增的列也并入 base_features
+    #   这样后面方差过滤 & 相关性过滤也会考虑它们
+    #base_features = list(set(base_features).union(new_cols))
 
     print(f"初始 base_features 数量: {len(base_features)}")
 
-    # ------------------ 7) 方差过滤 ------------------
+    # ------------------ 6) 更新特征列表 ------------------
+    selected_features = list(selected_func_names) + list(selected_system)
+    if selected_features:
+        missing_selected_features = [f for f in selected_features if f not in data.columns]
+        if missing_selected_features:
+            print(f"以下选择特征不存在，已忽略: {missing_selected_features}")
+        base_features = [f for f in selected_features if f in data.columns]
 
+    base_features = [f for f in base_features if f in data.columns]
+    if base_features:
+        data[base_features] = data[base_features].replace([np.inf, -np.inf], np.nan)
+  
+    # ------------------ 9) 方差过滤 ------------------
     print("对基础特征进行方差过滤...")
-    X_base = data[base_features].fillna(0)
-    selector = VarianceThreshold(threshold=0.0001)
-    selector.fit(X_base)
-    filtered_features = [f for f, s in zip(base_features, selector.get_support()) if s]
-    print(f"方差过滤后剩余特征数：{len(filtered_features)}（从{len(base_features)}减少）")
-    base_features = filtered_features
-
-    # ------------------ 8) 相关性过滤 ------------------
+    try:
+        X_base = data[base_features].fillna(0)
+        scaler_for_variance = StandardScaler()
+        X_base_scaled = scaler_for_variance.fit_transform(X_base)
+        selector = VarianceThreshold(threshold=1e-8)
+        selector.fit(X_base_scaled)
+        filtered_features = [f for f, s in zip(base_features, selector.get_support()) if s]
+        print(f"方差过滤后剩余特征数：{len(filtered_features)}（从{len(base_features)}减少）")
+        base_features = filtered_features
+    except Exception as e:
+        print(f"方差过滤出错：{e}")
+  
+    # ------------------ 10) 相关性过滤 ------------------
     print("对基础特征进行相关性过滤...")
     corr_matrix = data[base_features].corr().abs()
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
     to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
     base_features = [f for f in base_features if f not in to_drop]
     print(f"相关性过滤后剩余特征数：{len(base_features)}")
-  
-    # ------------------ 9) 若 mixture_depth > 1, 生成混合因子 ------------------
+    
+    # ------------------ 11) 若 mixture_depth > 1, 生成混合因子 ------------------
     print(f"生成混合因子, mixture_depth = {mixture_depth}")
     if mixture_depth > 1:
         operators = ['+', '-', '*', '/']
@@ -353,6 +484,8 @@ def preprocess_data(
 
         # 现在 all_features = 基础 + 混合
         all_features = mixed_features.copy()
+        if all_features:
+            data[all_features] = data[all_features].replace([np.inf, -np.inf], np.nan)
 
         # 最后做 PCA 降维
         print("进行 PCA 降维...")
@@ -369,26 +502,14 @@ def preprocess_data(
     else:
         all_features = base_features.copy()
 
-    print(f"最终特征数量：{len(all_features)}")
-
-    # ------------------ 10) 检查关键列 ------------------
-
-    required_cols = [
-        'Close_MA5_Diff', 'MA5_MA20_Diff', 'RSI_Signal', 'MACD_Diff',
-        'Bollinger_Position', 'K_D_Diff'
-    ]
-    for col in required_cols:
-        if col not in data.columns:
-            raise ValueError(f"列 {col} 未被创建，请检查数据和计算步骤。")
+    if all_features:
+        data[all_features] = data[all_features].replace([np.inf, -np.inf], np.nan).fillna(0)
 
     # ------------------ 11) 删除缺失值 & 返回 ------------------
-    print("删除缺失值...")
-    initial_length = len(data)
-    #data = data.dropna().copy()
-    final_length = len(data)
     data.index.name = 'date_index'
     #print(f"数据预处理前长度: {initial_length}, 数据预处理后长度: {final_length}")
-    print("all_features:",all_features)
+    #all_features = selected_func_names+selected_system
+    print(f"最终特征数量：{len(all_features)}")
     return data, all_features
 
 #时间序列强化采样

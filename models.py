@@ -126,12 +126,17 @@ class MLPClassifierModule(nn.Module):
         """
         super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.activation = activation()   # ← 激活函数实例化
+        mid_dim = max(hidden_dim // 2, output_dim)
+        self.fc_mid = nn.Linear(hidden_dim, mid_dim)
+        self.activation = activation()
         self.dropout = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.fc2 = nn.Linear(mid_dim, output_dim)
 
     def forward(self, X):
         X = self.fc1(X)
+        X = self.activation(X)
+        X = self.dropout(X)
+        X = self.fc_mid(X)
         X = self.activation(X)
         X = self.dropout(X)
         X = self.fc2(X)
@@ -268,7 +273,7 @@ def get_mlp_classifier(input_dim, class_weights=None):
         module__input_dim=input_dim,
         module__hidden_dim=128,#隐藏层维度
         module__output_dim=2,#输出类别数
-        module__dropout=0.5,#dropout概率
+        module__dropout=0.35,#dropout概率
         module__activation=nn.LeakyReLU,#激活函数，可选ReLU，Tanh，LeakyReLU
         criterion=loss,
         optimizer=torch.optim.AdamW,

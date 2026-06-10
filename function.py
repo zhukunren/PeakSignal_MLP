@@ -4,8 +4,12 @@ import os
 import tushare as ts
 
 
-ts.set_token('c5c5700a6f4678a1837ad234f2e9ea2a573a26b914b47fa2dbb38aff')
-pro = ts.pro_api()
+def get_tushare_pro():
+    token = os.getenv("TUSHARE_TOKEN")
+    if not token:
+        raise RuntimeError("请先设置 TUSHARE_TOKEN 环境变量，再调用 Tushare 数据接口。")
+    ts.set_token(token)
+    return ts.pro_api()
 
 # ---------- 技术指标计算函数 ----------
 
@@ -1010,6 +1014,7 @@ def read_day_from_tushare(symbol_code, symbol_type='stock'):
     assert symbol_type in ['stock', 'index'], "symbol_type 必须是 'stock' 或 'index'"
     
     try:
+        pro = get_tushare_pro()
         if symbol_type == 'stock':
             # 获取股票日线数据
             df = pro.daily(ts_code=symbol_code, start_date='20000101', end_date='20251231')

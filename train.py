@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -18,7 +19,7 @@ from preprocess import create_pos_neg_sequences_by_consecutive_labels
 from models import get_transformer_classifier, get_mlp_classifier
 from models import time_aware_oversampling
 
-from filter_feature import select_top_n_features_tree, auto_select_features, filter_features
+from filter_feature import filter_features
 
 def identity_transform(x):
     return x
@@ -47,6 +48,15 @@ def optimize_threshold(y_true, y_proba, metric='precision'):
     return best_thresh
 
 
+def expand_labels_to_next_turn(y: pd.Series) -> pd.Series:
+    """
+    训练目标从“今天就是峰/谷”改为“今天或下个交易日会出现峰/谷”。
+    回测仍使用模型预测信号，不直接使用真实标签；这里仅扩大可学习的拐点前沿样本。
+    """
+    y_int = y.astype(np.int64)
+    return ((y_int == 1) | (y_int.shift(-1, fill_value=0) == 1)).astype(np.int64)
+
+
 def train_model_for_label(
     df: pd.DataFrame,
     N: int,
@@ -60,9 +70,11 @@ def train_model_for_label(
 ):
     print(f"\n=== 开始训练 {label_column} 模型 ===")
     data = df.copy()
-    data.to_csv("简化版训练集.csv", index=False)
+    if os.getenv("EXPORT_TRAINING_DATASET") == "1":
+        data.to_csv("简化版训练集.csv", index=False)
     X = data[all_features]
     y = data[label_column].astype(np.int64)
+    print(f"{label_column} 训练正样本: {int(y.sum())}")
 
     corr_matrix = X.corr().abs()
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
@@ -111,21 +123,85 @@ def train_model_for_label(
             'max_epochs': [10]
         }
         scoring_used = 'precision'
+    elif classifier_name in ['XGBoost', 'XGB']:
+        print("准备训练固定参数 XGBoost 模型...")
+        from xgboost import XGBClassifier
+
+        y_array = y.to_numpy(dtype=np.int64)
+        split_index = int(len(X_scaled) * 0.8)
+        if y_array[:split_index].sum() == 0 or y_array[split_index:].sum() == 0:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled, y_array, test_size=0.2, random_state=42, stratify=y_array
+            )
+        else:
+            X_train, X_test = X_scaled[:split_index], X_scaled[split_index:]
+            y_train, y_test = y_array[:split_index], y_array[split_index:]
+
+        neg_count = max(int((y_train == 0).sum()), 1)
+        pos_count = max(int((y_train == 1).sum()), 1)
+        scale_pos_weight = neg_count / pos_count
+        random_state = int(np.random.randint(0, 1_000_000))
+
+        best_estimator = XGBClassifier(
+            n_estimators=500,
+            max_depth=3,
+            learning_rate=0.03,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            min_child_weight=3,
+            reg_lambda=3.0,
+            objective='binary:logistic',
+            eval_metric='aucpr',
+            scale_pos_weight=scale_pos_weight,
+            tree_method='hist',
+            random_state=random_state,
+            n_jobs=1,
+        )
+        best_estimator.fit(X_train, y_train)
+        scoring_used = 'f1'
+        y_proba = best_estimator.predict_proba(X_test)[:, 1]
+        best_thresh = optimize_threshold(y_test, y_proba, metric=scoring_used)
+        y_pred = (y_proba > best_thresh).astype(int)
+
+        precision = precision_score(y_test, y_pred, zero_division=0)
+        recall = recall_score(y_test, y_pred, zero_division=0)
+        pr_auc = average_precision_score(y_test, y_proba)
+        mcc = matthews_corrcoef(y_test, y_pred)
+        roc_value = roc_auc_score(y_test, y_proba)
+
+        print(f"XGBoost random_state={random_state}, scale_pos_weight={scale_pos_weight:.2f}")
+        print("\n=== 评估结果 ===")
+        print(classification_report(y_test, y_pred, zero_division=0))
+        print(confusion_matrix(y_test, y_pred))
+        print(f"ROC AUC: {roc_value:.4f}, PR AUC: {pr_auc:.4f}, MCC: {mcc:.4f}")
+
+        metrics = {
+            'ROC AUC': roc_value,
+            'PR AUC': pr_auc,
+            'Precision': precision,
+            'Recall': recall,
+            'MCC': mcc
+        }
+
+        return (
+            best_estimator, scaler, FunctionTransformer(func=identity_transform), selected_features,
+            all_features_filtered, f1_score(y_test, y_pred, zero_division=0), metrics, best_thresh
+        )
     else:
         print("准备对 MLP 做过采样处理...")
         sampler = None
         if oversample_method == 'SMOTE':
-            sampler = SMOTE(random_state=42)
+            sampler = SMOTE(random_state=42, k_neighbors=3)
         elif oversample_method == 'ADASYN':
-            sampler = ADASYN(random_state=42)
+            sampler = ADASYN(random_state=42, n_neighbors=3)
         elif oversample_method == 'Borderline-SMOTE':
-            sampler = BorderlineSMOTE(random_state=42, kind='borderline-1')
+            sampler = BorderlineSMOTE(random_state=42, kind='borderline-1', k_neighbors=3)
         elif oversample_method == 'SMOTEENN':
-            sampler = SMOTEENN(random_state=42)
+            sampler = SMOTEENN(random_state=42, smote=SMOTE(random_state=42, k_neighbors=3))
         elif oversample_method == 'SMOTETomek':
-            sampler = SMOTETomek(random_state=42)
+            sampler = SMOTETomek(random_state=42, smote=SMOTE(random_state=42, k_neighbors=3))
         elif oversample_method == 'Time-Aware':
-            X_os, y_os = time_aware_oversampling(X_scaled, y, recency_weight=0.5, sequence_length=60)
+            X_os, y_os = time_aware_oversampling(X_scaled, y, recency_weight=0.7, sequence_length=60)
         elif oversample_method in ['Class Weights', 'None']:
             sampler = None
         else:

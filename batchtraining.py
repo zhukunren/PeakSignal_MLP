@@ -153,12 +153,12 @@ def main():
                             mixture_depth,
                             window_size=window_size,
                             eval_mode=True,
-                            N_buy=N_buy,
-                            N_sell=N_sell,
-                            N_newhigh=N_newhigh,
-                            enable_chase=enable_chase,
-                            enable_stop_loss=enable_stop_loss,
-                            enable_change_signal=enable_change_signal,
+                            N_buy=1,
+                            N_sell=1,
+                            N_newhigh=60,
+                            enable_chase=False,
+                            enable_stop_loss=False,
+                            enable_change_signal=False,
                         )
                         current_excess = bt_result_temp.get('超额收益率', -np.inf)
                         if current_excess > best_excess:

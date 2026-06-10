@@ -1,12 +1,17 @@
 import tushare as ts
 import pandas as pd
 import numpy as np
+import os
 
-# 设置Tushare API token
-ts.set_token('2876ea85cb005fb5fa17c809a98174f2d5aae8b1f830110a5ead6211')
-pro = ts.pro_api()
 
-def read_day_from_tushare(symbol_code, symbol_type='index'):
+def get_tushare_pro():
+    token = os.getenv("TUSHARE_TOKEN")
+    if not token:
+        raise RuntimeError("请先设置 TUSHARE_TOKEN 环境变量，再调用 Tushare 数据接口。")
+    ts.set_token(token)
+    return ts.pro_api()
+
+def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101', end_date='20260608'):
     """
     使用 Tushare API 获取股票或指数的全部日线行情数据。
     参数:
@@ -23,9 +28,10 @@ def read_day_from_tushare(symbol_code, symbol_type='index'):
     assert symbol_type in ['stock', 'index'], "symbol_type 必须是 'stock' 或 'index'"
     
     try:
+        pro = get_tushare_pro()
         if symbol_type == 'stock':
             # 获取股票日线数据
-            df = pro.daily(ts_code=symbol_code, start_date='19920101', end_date='20251231')
+            df = pro.daily(ts_code=symbol_code, start_date=start_date, end_date=end_date)
             if df.empty:
                 print("Tushare 返回的股票数据为空。")
                 return pd.DataFrame()
@@ -53,7 +59,7 @@ def read_day_from_tushare(symbol_code, symbol_type='index'):
         
         elif symbol_type == 'index':
             # 获取指数日线数据，使用 index_daily 接口
-            df = pro.index_daily(ts_code=symbol_code, start_date='19920101', end_date='20251231')
+            df = pro.index_daily(ts_code=symbol_code, start_date=start_date, end_date=end_date)
             if df.empty:
                 print("Tushare 返回的指数数据为空。")
                 return pd.DataFrame()

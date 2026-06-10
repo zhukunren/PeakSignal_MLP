@@ -1,0 +1,11 @@
+imbalanced-learn
+joblib
+numpy
+pandas
+plotly
+scikit-learn
+skorch
+streamlit
+torch
+tushare
+xgboost

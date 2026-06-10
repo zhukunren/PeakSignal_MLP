@@ -60,7 +60,9 @@ def predict_new_data(
     enable_chase=True, 
     enable_stop_loss=True,
     enable_change_signal=False,
-    N_newhigh=60
+    N_newhigh=60,
+    backtest_start_date=None,
+    backtest_end_date=None,
 ):
     """
     使用训练好的模型(峰/谷)对 new_df 做预测，并可选做回测。
@@ -251,14 +253,15 @@ def predict_new_data(
     enable_chase=True, 
     enable_stop_loss=True,
     enable_change_signal=False,
-    N_newhigh=60
+    N_newhigh=60,
+    backtest_start_date=None,
+    backtest_end_date=None,
 ):
     """
     使用训练好的模型(峰/谷)对 new_df 做预测，并可选做回测。
     注意：peak_selected_features/trough_selected_features 是模型真正见过的特征列表。
     """
     print("开始预测新数据...")
-    new_df_1 = pd.read_csv("D:\项目\机器学习\完整版预测集.csv")
     try:
         # 首先做预处理
         data_preprocessed, _ = preprocess_data(
@@ -269,41 +272,6 @@ def predict_new_data(
         )
         # ========== 预测 Peak ==========
         print("\n开始 Peak 预测...")
-   
-        
-        # 要跳过的列（全部小写）
-        skip_cols = {'index', 'tradedate'}
-
-        # 1) 构建 new_df 的小写列名到原始列名的映射
-        lower_to_col = {
-            col.lower(): col
-            for col in new_df.columns
-            if isinstance(col, str)
-        }
-
-        # 2) 遍历 new_df_1 的列
-        for col1 in new_df_1.columns:
-            col1_lower = col1.lower()
-            # 跳过索引列和 TradeDate
-            if col1_lower in skip_cols:
-                print(f"跳过列: {col1}")
-                continue
-
-            print(f"处理 new_df_1 列: {col1}")
-            if col1_lower in lower_to_col:
-                col2 = lower_to_col[col1_lower]
-                print(f"  匹配: {col1} → {col2}")
-                s1 = new_df_1[col1]
-                s2 = new_df[col2]
-                # 只比较长度，不触发 Series 布尔二义性
-                if len(s1) == len(s2):
-                    new_df[col2] = s1.values
-                else:
-                    print(f"  警告：行数不匹配 {len(s1)} ≠ {len(s2)}，跳过赋值")
-            else:
-                print(f"  未找到匹配列，跳过")
-
-
 
         # 补全新数据中缺失的特征
         missing_peak = [f for f in peak_selected_features if f not in data_preprocessed.columns]
@@ -429,6 +397,15 @@ def predict_new_data(
         data_preprocessed['Trough_Probability'] = trough_probas
         data_preprocessed['Trough_Prediction'] = trough_preds
 
+        if backtest_start_date is not None or backtest_end_date is not None:
+            trade_dates = pd.to_datetime(data_preprocessed['TradeDate'], errors='coerce')
+            mask = pd.Series(True, index=data_preprocessed.index)
+            if backtest_start_date is not None:
+                mask &= trade_dates >= pd.to_datetime(str(backtest_start_date), format='%Y%m%d', errors='coerce')
+            if backtest_end_date is not None:
+                mask &= trade_dates <= pd.to_datetime(str(backtest_end_date), format='%Y%m%d', errors='coerce')
+            data_preprocessed = data_preprocessed.loc[mask].copy()
+
         # ====== 后处理：20日内不重复预测 (根据原逻辑) ======
         print("\n进行后处理...")
         data_preprocessed.index = data_preprocessed.index.astype(str)
@@ -444,7 +421,7 @@ def predict_new_data(
 
         # 若启用其他信号修改
         if enable_change_signal:
-            data_preprocessed = change_troug_and_peak(data_preprocessed, N_newhigh)
+            data_preprocessed = change_trough_and_peak(data_preprocessed, N_newhigh)
 
         # ====== 回测部分 ======
         signal_df = get_trade_signal(data_preprocessed)
@@ -691,7 +668,7 @@ def predict_new_data_with_ensemble(
                 data_preprocessed.iloc[start:end, data_preprocessed.columns.get_loc('Trough_Prediction')] = 0
         
         if enable_change_signal:
-            data_preprocessed = change_troug_and_peak(data_preprocessed, N_newhigh)
+            data_preprocessed = change_trough_and_peak(data_preprocessed, N_newhigh)
         
         # ---------------- 回测 ----------------
         signal_df = get_trade_signal(data_preprocessed)
@@ -849,8 +826,12 @@ def get_trade_signal(data_preprocessed):
     data_preprocessed = data_preprocessed.copy()
 
     # 筛选出存在高点或低点预测的行
-    signal_df = data_preprocessed[(data_preprocessed['Peak_Prediction'] == 1) | 
-                                  (data_preprocessed['Trough_Prediction'] == 1)]
+    signal_mask = (
+        (data_preprocessed['Peak_Prediction'] == 1)
+        | (data_preprocessed['Trough_Prediction'] == 1)
+    )
+    signal_df = data_preprocessed.loc[signal_mask, ['Peak_Prediction', 'Trough_Prediction']].copy()
+    signal_df['direction'] = ''
     
     # 对于高点预测的行，设定方向为 'sell'
     signal_df.loc[signal_df['Peak_Prediction'] == 1, 'direction'] = 'sell'

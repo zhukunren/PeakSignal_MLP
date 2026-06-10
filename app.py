@@ -14,10 +14,15 @@ import time
 from models import set_seed
 from preprocess import preprocess_data, create_pos_neg_sequences_by_consecutive_labels
 from train import train_model
-from predict import predict_new_data
+from predict import predict_new_data, get_trade_signal, change_trough_and_peak
+from backtest import backtest_results
 from tushare_function import read_day_from_tushare, select_time
 from plot_candlestick import plot_candlestick
 from models import time_aware_oversampling
+
+TARGET_REPRO_SEED_BASE = 7300
+TARGET_REPRO_BEST_ROUND = 8
+TARGET_PRED_END = datetime(2026, 6, 8)
 
 # 设置随机种子
 set_seed(42)
@@ -52,6 +57,14 @@ if 'final_result' not in st.session_state:
     st.session_state.final_result = None
 if 'final_bt' not in st.session_state:
     st.session_state.final_bt = {}
+if 'final_trades_df' not in st.session_state:
+    st.session_state.final_trades_df = pd.DataFrame()
+if 'base_prediction_result' not in st.session_state:
+    st.session_state.base_prediction_result = None
+if 'selected_prediction_models' not in st.session_state:
+    st.session_state.selected_prediction_models = None
+if 'base_selection_bt' not in st.session_state:
+    st.session_state.base_selection_bt = {}
 
 # ★ 新增：模型微调后的预测 / 回测结果，用于对比
 if 'inc_final_result' not in st.session_state:
@@ -142,6 +155,54 @@ def load_custom_css():
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
+
+def normalize_market_data(df):
+    base_cols = ["Open", "High", "Low", "Close", "Volume", "Amount", "TradeDate"]
+    keep_cols = [col for col in base_cols if col in df.columns]
+    out = df[keep_cols].copy()
+    if "TradeDate" not in out.columns:
+        return pd.DataFrame(columns=base_cols)
+    out["TradeDate"] = out["TradeDate"].astype(str).str.replace("-", "", regex=False)
+    for col in ["Open", "High", "Low", "Close", "Volume", "Amount"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    return out.dropna(subset=["TradeDate", "Open", "High", "Low", "Close"])
+
+
+def read_front_market_data(symbol_code, symbol_type, end_date):
+    """
+    对齐组合训练脚本的数据口径：默认指数 000001.SH 优先复用本地完整数据.csv，
+    再用 Tushare 补齐到 end_date；其他标的仍直接从 Tushare 获取。
+    """
+    end_date = str(end_date)
+
+    if symbol_type != "index" or symbol_code != "000001.SH":
+        return read_day_from_tushare(symbol_code, symbol_type, end_date=end_date)
+
+    local_raw = pd.DataFrame()
+    try:
+        local_raw = normalize_market_data(pd.read_csv("完整数据.csv"))
+    except Exception:
+        local_raw = pd.DataFrame()
+
+    if local_raw.empty:
+        ts_df = read_day_from_tushare(symbol_code, symbol_type, end_date=end_date)
+        return normalize_market_data(ts_df.reset_index(drop=True))
+
+    raw = local_raw.copy()
+    if raw["TradeDate"].max() < end_date:
+        ts_df = read_day_from_tushare(symbol_code, symbol_type, end_date=end_date)
+        ts_raw = normalize_market_data(ts_df.reset_index(drop=True)) if not ts_df.empty else pd.DataFrame()
+        if not ts_raw.empty:
+            raw = (
+                pd.concat([raw, ts_raw], ignore_index=True)
+                .drop_duplicates(subset=["TradeDate"], keep="last")
+                .sort_values("TradeDate")
+                .reset_index(drop=True)
+            )
+
+    raw = raw[raw["TradeDate"] <= end_date].copy()
+    return raw.reset_index(drop=True)
 
 # ========== 模型微调的辅助函数 ========== #
 def incremental_train_for_label(model, scaler, selected_features, df_new, label_column, classifier_name,
@@ -533,6 +594,185 @@ def add_model_save_functionality(symbol_code):
                 st.error(f"保存模型失败: {str(e)}")
 
 
+def render_prediction_model_download(symbol_code, model_state_key="selected_prediction_models"):
+    models_to_save = st.session_state.get(model_state_key)
+    if not models_to_save:
+        return
+
+    export_models = dict(models_to_save)
+    export_models.update({
+        "saved_from": "prediction_best_combo",
+        "symbol_code": symbol_code,
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "selection_metric": "超额收益率",
+        "strategy_applied_after_selection": True,
+    })
+    if st.session_state.get("prediction_cache_key"):
+        export_models["prediction_cache_key"] = st.session_state.prediction_cache_key
+    if st.session_state.get("base_selection_bt"):
+        export_models["base_selection_bt"] = st.session_state.base_selection_bt
+    export_models["last_strategy_params"] = {
+        "N_buy": st.session_state.get("n_buy_val", 10),
+        "N_sell": st.session_state.get("n_sell_val", 10),
+        "N_newhigh": st.session_state.get("n_newhigh_val", 60),
+        "enable_chase": st.session_state.get("enable_chase_val", False),
+        "enable_stop_loss": st.session_state.get("enable_stop_loss_val", False),
+        "enable_change_signal": st.session_state.get("enable_change_signal_val", False),
+    }
+
+    default_name = f"best_combo_model_{symbol_code}_{datetime.now().strftime('%Y%m%d')}"
+    st.download_button(
+        label="保存当前组合模型文件",
+        data=pickle.dumps(export_models),
+        file_name=f"{default_name}.pkl",
+        mime="application/octet-stream",
+        key=f"download_{model_state_key}",
+    )
+
+
+def apply_strategy_to_prediction(
+    base_result,
+    n_buy,
+    n_sell,
+    n_newhigh,
+    enable_chase,
+    enable_stop_loss,
+    enable_change_signal,
+):
+    """Use cached model predictions to rebuild trades and metrics with strategy settings."""
+    if base_result is None or base_result.empty:
+        raise ValueError("没有可用的预测缓存，请先完成一次预测。")
+
+    result = base_result.copy()
+    for col in ["entry_date", "exit_date", "trade", "date"]:
+        if col in result.columns:
+            result = result.drop(columns=[col])
+
+    if enable_change_signal:
+        result = change_trough_and_peak(result, n_newhigh)
+
+    signal_df = get_trade_signal(result)
+    bt_result, trades_df = backtest_results(
+        result,
+        signal_df,
+        n_buy,
+        n_sell,
+        enable_chase,
+        enable_stop_loss,
+        initial_capital=1_000_000,
+    )
+    result = mark_trade_points(result, trades_df)
+    return result, bt_result, trades_df
+
+
+def mark_trade_points(result_df, trades_df):
+    result_df = result_df.copy()
+    if not isinstance(result_df.index, pd.DatetimeIndex):
+        result_df.index = pd.to_datetime(result_df.index, errors="coerce")
+    result_df["trade"] = None
+    if trades_df is None or trades_df.empty:
+        return result_df
+
+    for _, trade in trades_df.iterrows():
+        entry_date = pd.to_datetime(trade.get("entry_date"), errors="coerce")
+        exit_date = pd.to_datetime(trade.get("exit_date"), errors="coerce")
+        if pd.notna(exit_date) and exit_date in result_df.index:
+            result_df.loc[exit_date, "trade"] = "sell"
+        if pd.notna(entry_date) and entry_date in result_df.index:
+            result_df.loc[entry_date, "trade"] = "buy"
+    return result_df
+
+
+def render_backtest_outputs(
+    result_df,
+    bt_result,
+    trades_df,
+    symbol_code,
+    pred_start,
+    pred_end,
+    chart_key,
+):
+    st.subheader("回测结果")
+    metrics = [
+        ("累计收益率", bt_result.get("累计收益率", 0)),
+        ("超额收益率", bt_result.get("超额收益率", 0)),
+        ("胜率", bt_result.get("胜率", 0)),
+        ("交易笔数", bt_result.get("交易笔数", 0)),
+        ("最大回撤", bt_result.get("最大回撤", 0)),
+        ("夏普比率", bt_result.get("年化夏普比率", 0)),
+    ]
+    cols_1 = st.columns(3)
+    for col, (name, value) in zip(cols_1, metrics[:3]):
+        col.metric(name, format_metric_value(name, value))
+    cols_2 = st.columns(3)
+    for col, (name, value) in zip(cols_2, metrics[3:]):
+        col.metric(name, format_metric_value(name, value))
+
+    peaks_pred = result_df[result_df["Peak_Prediction"] == 1]
+    troughs_pred = result_df[result_df["Trough_Prediction"] == 1]
+    fig = plot_candlestick(
+        result_df.copy(),
+        symbol_code,
+        pred_start.strftime("%Y%m%d"),
+        pred_end.strftime("%Y%m%d"),
+        peaks_pred,
+        troughs_pred,
+        prediction=True,
+        bt_result=bt_result,
+    )
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+
+    col_left, col_right = st.columns(2)
+    display_result = result_df.rename(columns={
+        "TradeDate": "交易日期",
+        "Peak_Prediction": "高点标注",
+        "Peak_Probability": "高点概率",
+        "Trough_Prediction": "低点标注",
+        "Trough_Probability": "低点概率",
+    })
+    with col_left:
+        st.subheader("预测明细")
+        st.dataframe(display_result[["交易日期", "高点标注", "高点概率", "低点标注", "低点概率"]])
+
+    display_trades = trades_df.rename(columns={
+        "entry_date": "买入日",
+        "signal_type_buy": "买入原因",
+        "entry_price": "买入价",
+        "exit_date": "卖出日",
+        "signal_type_sell": "卖出原因",
+        "exit_price": "卖出价",
+        "hold_days": "持仓日",
+        "return": "盈亏",
+    })
+    if not display_trades.empty:
+        display_trades["盈亏"] = display_trades["盈亏"] * 100
+        display_trades["买入日"] = pd.to_datetime(display_trades["买入日"]).dt.strftime("%Y-%m-%d")
+        display_trades["卖出日"] = pd.to_datetime(display_trades["卖出日"]).dt.strftime("%Y-%m-%d")
+
+    with col_right:
+        st.subheader("交易记录")
+        if not display_trades.empty:
+            st.dataframe(display_trades[[
+                "买入日", "买入原因", "买入价",
+                "卖出日", "卖出原因", "卖出价",
+                "持仓日", "盈亏",
+            ]].style.format({"盈亏": "{:.2f}%"}))
+        else:
+            st.write("暂无交易记录")
+
+
+def format_metric_value(name, value):
+    if value is None:
+        return "暂无"
+    if isinstance(value, (int, np.integer)) and "笔数" in name:
+        return f"{int(value)}"
+    if isinstance(value, (float, np.floating)):
+        if name == "夏普比率":
+            return f"{float(value):.4f}"
+        return f"{float(value) * 100:.2f}%"
+    return f"{value}"
+
+
 def main_product():
     inject_orientation_script()
     st.title("东吴秀享AI超额收益系统")
@@ -543,7 +783,7 @@ def main_product():
         with st.expander("数据设置", expanded=True):
             data_source = st.selectbox("选择数据来源", ["指数", "股票"])
             symbol_code = st.text_input(f"{data_source}代码", "000001.SH")
-            N = st.number_input("窗口长度 N", min_value=5, max_value=100, value=30)
+            N = st.number_input("窗口长度 N", min_value=5, max_value=100, value=20)
         with st.expander("模型设置", expanded=True):
             classifier_name_display = st.selectbox("选择模型", ["Transformer", "深度学习"], index=1)
             classifier_name = "MLP" if classifier_name_display == "深度学习" else "Transformer"
@@ -581,17 +821,21 @@ def main_product():
         st.subheader("训练参数")
         col1, col2 = st.columns(2)
         with col1:
-            train_start = st.date_input("训练开始日期", datetime(2000, 1, 1))
+            train_start = st.date_input("训练开始日期", datetime(2000, 1, 1), key="train_start_tab1")
         with col2:
-            train_end = st.date_input("训练结束日期", datetime(2020, 12, 31))
+            train_end = st.date_input("训练结束日期", datetime(2020, 12, 31), key="train_end_tab1")
 
-        num_rounds = 10  # 固定多轮训练次数
+        num_rounds = 10  # 固定多轮训练次数，默认包含 seed=7308 的第8轮目标模型
         if st.button("开始训练"):
             begin_time = time.time()
             try:
                 with st.spinner("数据预处理中..."):
                     symbol_type = 'index' if data_source == '指数' else 'stock'
-                    raw_data = read_day_from_tushare(symbol_code, symbol_type)
+                    raw_data = read_front_market_data(
+                        symbol_code,
+                        symbol_type,
+                        TARGET_PRED_END.strftime("%Y%m%d")
+                    )
                     raw_data, all_features_train = preprocess_data(
                         raw_data, N, mixture_depth, mark_labels=True
                     )
@@ -605,8 +849,10 @@ def main_product():
                     status_text = st.empty()
 
                     for i in range(num_rounds):
+                        round_seed = TARGET_REPRO_SEED_BASE + i + 1
+                        set_seed(round_seed)
                         progress_val = (i + 1) / num_rounds
-                        status_text.text(f"正在训练第 {i+1}/{num_rounds} 组模型...")
+                        status_text.text(f"正在训练第 {i+1}/{num_rounds} 组模型，seed={round_seed}...")
                         progress_bar.progress(progress_val)
 
                         (peak_model, peak_scaler, peak_selector, peak_selected_features,
@@ -645,7 +891,9 @@ def main_product():
                     'trough_selected_features': trough_selected_features,
                     'trough_threshold': trough_threshold,
                     'N': N,
-                    'mixture_depth': mixture_depth
+                    'mixture_depth': mixture_depth,
+                    'seed_base': TARGET_REPRO_SEED_BASE,
+                    'target_round': TARGET_REPRO_BEST_ROUND
                 }
                 st.session_state.train_df_preprocessed = df_preprocessed_train
                 st.session_state.train_all_features = all_features_train
@@ -676,7 +924,11 @@ def main_product():
         try:
             st.markdown("<h2 style='font-size:20px;'>训练集可视化</h2>", unsafe_allow_html=True)
             symbol_type = 'index' if data_source == '指数' else 'stock'
-            raw_data = read_day_from_tushare(symbol_code, symbol_type)
+            raw_data = read_front_market_data(
+                symbol_code,
+                symbol_type,
+                TARGET_PRED_END.strftime("%Y%m%d")
+            )
             
             raw_data, _ = preprocess_data(
                 raw_data, N, mixture_depth, mark_labels=True
@@ -707,9 +959,9 @@ def main_product():
             st.subheader("预测参数")
             col_date1, col_date2 = st.columns(2)
             with col_date1:
-                pred_start = st.date_input("预测开始日期", datetime(2021, 1, 1))
+                pred_start = st.date_input("预测开始日期", datetime(2021, 1, 1), key="pred_start_tab2")
             with col_date2:
-                pred_end = st.date_input("预测结束日期", datetime.now())
+                pred_end = st.date_input("预测结束日期", TARGET_PRED_END, key="pred_end_tab2")
 
             with st.expander("策略选择", expanded=False):
                 load_custom_css()
@@ -771,12 +1023,21 @@ def main_product():
                         return
 
                     symbol_type = 'index' if data_source == '指数' else 'stock'
-                    raw_data = read_day_from_tushare(symbol_code, symbol_type)
-                    raw_data, _ = preprocess_data(raw_data, N, mixture_depth, mark_labels=False)
-                    new_df_raw = select_time(raw_data, pred_start.strftime("%Y%m%d"), pred_end.strftime("%Y%m%d"))
+                    raw_data = read_front_market_data(
+                        symbol_code,
+                        symbol_type,
+                        end_date=pred_end.strftime("%Y%m%d")
+                    )
+                    new_df_raw = raw_data.copy()
+                    new_df_for_display = select_time(
+                        raw_data.copy(),
+                        pred_start.strftime("%Y%m%d"),
+                        pred_end.strftime("%Y%m%d")
+                    )
 
                     # 存到 session_state，供模型微调使用
                     st.session_state.new_df_raw = new_df_raw
+                    st.session_state.new_df_display = new_df_for_display
 
                     # 策略参数
                     enable_chase_val = enable_chase
@@ -791,7 +1052,7 @@ def main_product():
 
                     best_excess = -np.inf
                     best_models = None
-                    final_result, final_bt, final_trades_df = None, {}, pd.DataFrame()
+                    base_result, base_bt = None, {}
 
                     # 多组合搜索
                     if use_best_combo:
@@ -799,6 +1060,7 @@ def main_product():
                         total_combos = len(model_combinations)
                         progress_bar = st.progress(0)
                         status_text = st.empty()
+                        first_combo_error = None
 
                         for idx, (peak_m, trough_m) in enumerate(model_combinations):
                             combo_progress = (idx + 1) / total_combos
@@ -816,12 +1078,14 @@ def main_product():
                                     st.session_state.models['mixture_depth'],
                                     window_size=10,
                                     eval_mode=True,
-                                    N_buy=n_buy_val,
-                                    N_sell=n_sell_val,
-                                    N_newhigh=n_newhigh_val,
-                                    enable_chase=enable_chase_val,
-                                    enable_stop_loss=enable_stop_loss_val,
-                                    enable_change_signal=enable_change_signal_val,
+                                    N_buy=1,
+                                    N_sell=1,
+                                    N_newhigh=60,
+                                    enable_chase=False,
+                                    enable_stop_loss=False,
+                                    enable_change_signal=False,
+                                    backtest_start_date=pred_start.strftime("%Y%m%d"),
+                                    backtest_end_date=pred_end.strftime("%Y%m%d"),
                                 )
                                 current_excess = bt_result.get('超额收益率', -np.inf)
                                 if current_excess > best_excess:
@@ -838,16 +1102,19 @@ def main_product():
                                         'trough_selected_features': tfeats,
                                         'trough_threshold': tth
                                     }
-                            except:
+                            except Exception as e:
+                                if first_combo_error is None:
+                                    first_combo_error = e
                                 continue
 
                         progress_bar.empty()
                         status_text.empty()
 
                         if best_models is None:
-                            raise ValueError("所有组合均测试失败，无法完成预测。")
+                            detail = f"首个失败原因：{first_combo_error}" if first_combo_error is not None else "没有可测试的模型组合。"
+                            raise ValueError(f"所有组合均测试失败，无法完成预测。{detail}")
 
-                        final_result, final_bt, final_trades_df = predict_new_data(
+                        base_result, base_bt, _ = predict_new_data(
                             new_df_raw,
                             best_models['peak_model'],
                             best_models['peak_scaler'],
@@ -863,44 +1130,34 @@ def main_product():
                             st.session_state.models['mixture_depth'],
                             window_size=10,
                             eval_mode=False,
-                            N_buy=n_buy_val,
-                            N_sell=n_sell_val,
-                            N_newhigh=n_newhigh_val,
-                            enable_chase=enable_chase_val,
-                            enable_stop_loss=enable_stop_loss_val,
-                            enable_change_signal=enable_change_signal_val,
+                            N_buy=1,
+                            N_sell=1,
+                            N_newhigh=60,
+                            enable_chase=False,
+                            enable_stop_loss=False,
+                            enable_change_signal=False,
+                            backtest_start_date=pred_start.strftime("%Y%m%d"),
+                            backtest_end_date=pred_end.strftime("%Y%m%d"),
                         )
                         
-                        st.success(f"预测完成！(多组合) 最佳超额收益率: {best_excess * 100:.2f}%")
+                        st.success(f"预测完成！(多组合，未叠加策略筛选) 最佳超额收益率: {best_excess * 100:.2f}%")
                     
                     else:
                         # 单模型预测
                         single_models = st.session_state.models
-                        _, bt_result_temp, _ = predict_new_data(
-                            new_df_raw,
-                            single_models['peak_model'],
-                            single_models['peak_scaler'],
-                            single_models['peak_selector'],
-                            single_models['peak_selected_features'],
-                            single_models['peak_threshold'],
-                            single_models['trough_model'],
-                            single_models['trough_scaler'],
-                            single_models['trough_selector'],
-                            single_models['trough_selected_features'],
-                            single_models['trough_threshold'],
-                            st.session_state.models['N'],
-                            st.session_state.models['mixture_depth'],
-                            window_size=10,
-                            eval_mode=True,
-                            N_buy=n_buy_val,
-                            N_sell=n_sell_val,
-                            N_newhigh=n_newhigh_val,
-                            enable_chase=enable_chase_val,
-                            enable_stop_loss=enable_stop_loss_val,
-                            enable_change_signal=enable_change_signal_val,
-                        )
-                        best_excess = bt_result_temp.get('超额收益率', -np.inf)
-                        final_result, final_bt, final_trades_df = predict_new_data(
+                        best_models = {
+                            'peak_model': single_models['peak_model'],
+                            'peak_scaler': single_models['peak_scaler'],
+                            'peak_selector': single_models['peak_selector'],
+                            'peak_selected_features': single_models['peak_selected_features'],
+                            'peak_threshold': single_models['peak_threshold'],
+                            'trough_model': single_models['trough_model'],
+                            'trough_scaler': single_models['trough_scaler'],
+                            'trough_selector': single_models['trough_selector'],
+                            'trough_selected_features': single_models['trough_selected_features'],
+                            'trough_threshold': single_models['trough_threshold'],
+                        }
+                        base_result, base_bt, _ = predict_new_data(
                             new_df_raw,
                             single_models['peak_model'],
                             single_models['peak_scaler'],
@@ -916,96 +1173,34 @@ def main_product():
                             st.session_state.models['mixture_depth'],
                             window_size=10,
                             eval_mode=False,
-                            N_buy=n_buy_val,
-                            N_sell=n_sell_val,
-                            N_newhigh=n_newhigh_val,
-                            enable_chase=enable_chase_val,
-                            enable_stop_loss=enable_stop_loss_val,
-                            enable_change_signal=enable_change_signal_val,
+                            N_buy=1,
+                            N_sell=1,
+                            N_newhigh=60,
+                            enable_chase=False,
+                            enable_stop_loss=False,
+                            enable_change_signal=False,
+                            backtest_start_date=pred_start.strftime("%Y%m%d"),
+                            backtest_end_date=pred_end.strftime("%Y%m%d"),
                         )
-                        st.success(f"预测完成！(单模型) 超额收益率: {best_excess*100:.2f}%")
+                        best_excess = base_bt.get('超额收益率', -np.inf)
+                        st.success(f"预测完成！(单模型，未叠加策略筛选) 超额收益率: {best_excess*100:.2f}%")
 
-                    # 显示回测结果
-                    st.subheader("回测结果")
-                    metrics = [
-                        ('累计收益率',   final_bt.get('累计收益率', 0)),
-                        ('超额收益率',   final_bt.get('超额收益率', 0)),
-                        ('胜率',         final_bt.get('胜率', 0)),
-                        ('交易笔数',     final_bt.get('交易笔数', 0)),
-                        ('最大回撤',     final_bt.get('最大回撤', 0)),
-                        ('夏普比率',     '{:.4f}'.format(final_bt.get('年化夏普比率', 0)))
-                    ]
-                    first_line = metrics[:3]
-                    cols_1 = st.columns(3)
-                    for col, (name, value) in zip(cols_1, first_line):
-                        if isinstance(value, float):
-                            col.metric(name, f"{float(value)*100:.2f}%" if "比率" not in name else f"{value}")
-                        else:
-                            col.metric(name, f"{value}")
-                    second_line = metrics[3:]
-                    cols_2 = st.columns(3)
-                    for col, (name, value) in zip(cols_2, second_line):
-                        if isinstance(value, float):
-                            col.metric(name, f"{float(value)*100:.2f}%" if "比率" not in name else f"{value}")
-                        else:
-                            col.metric(name, f"{value}")
-
-                    # 蜡烛图
-                    peaks_pred = final_result[final_result['Peak_Prediction'] == 1]
-                    troughs_pred = final_result[final_result['Trough_Prediction'] == 1]
-                    fig = plot_candlestick(
-                        final_result,
-                        symbol_code,
-                        pred_start.strftime("%Y%m%d"),
-                        pred_end.strftime("%Y%m%d"),
-                        peaks_pred,
-                        troughs_pred,
-                        prediction=True
-                    )
-                    st.plotly_chart(fig, use_container_width=True, key="chart3")
-
-                    # 预测明细 & 交易记录
-                    col_left, col_right = st.columns(2)
-                    final_result = final_result.rename(columns={
-                        'TradeDate': '交易日期',
-                        'Peak_Prediction': '高点标注',
-                        'Peak_Probability': '高点概率',
-                        'Trough_Prediction': '低点标注',
-                        'Trough_Probability': '低点概率'
-                    })
-                    with col_left:
-                        st.subheader("预测明细")
-                        st.dataframe(final_result[['交易日期', '高点标注', '高点概率', '低点标注', '低点概率']])
-
-                    final_trades_df = final_trades_df.rename(columns={
-                        "entry_date": '买入日',
-                        "signal_type_buy": '买入原因',
-                        "entry_price": '买入价',
-                        "exit_date": '卖出日',
-                        "signal_type_sell": '卖出原因',
-                        "exit_price": '卖出价',
-                        "hold_days": '持仓日',
-                        "return": '盈亏'
-                    })
-                    if not final_trades_df.empty:
-                        final_trades_df['盈亏'] = final_trades_df['盈亏'] * 100
-                        final_trades_df['买入日'] = final_trades_df['买入日'].dt.strftime('%Y-%m-%d')
-                        final_trades_df['卖出日'] = final_trades_df['卖出日'].dt.strftime('%Y-%m-%d')
-
-                    with col_right:
-                        st.subheader("交易记录")
-                        if not final_trades_df.empty:
-                            st.dataframe(final_trades_df[[
-                                '买入日', '买入原因', '买入价',
-                                '卖出日', '卖出原因', '卖出价',
-                                '持仓日', '盈亏'
-                            ]].style.format({'盈亏': '{:.2f}%'}))
-                        else:
-                            st.write("暂无交易记录")
-
-                    # 保存到 session_state
-                    st.session_state.final_result = final_result
-                    st.session_state.final_bt = final_bt
+                    cached_models = {
+                        **best_models,
+                        'N': st.session_state.models['N'],
+                        'mixture_depth': st.session_state.models['mixture_depth'],
+                    }
+                    st.session_state.selected_prediction_models = cached_models
+                    st.session_state.best_models = cached_models
+                    st.session_state.models.update(cached_models)
+                    st.session_state.base_prediction_result = base_result.copy()
+                    st.session_state.base_selection_bt = base_bt
+                    st.session_state.prediction_cache_key = {
+                        'data_source': data_source,
+                        'symbol_code': symbol_code,
+                        'pred_start': pred_start.strftime("%Y%m%d"),
+                        'pred_end': pred_end.strftime("%Y%m%d"),
+                    }
                     st.session_state.pred_start = pred_start
                     st.session_state.pred_end = pred_end
                     st.session_state.n_buy_val = n_buy_val
@@ -1017,6 +1212,50 @@ def main_product():
 
                 except Exception as e:
                     st.error(f"预测失败: {str(e)}")
+
+            current_cache_key = {
+                'data_source': data_source,
+                'symbol_code': symbol_code,
+                'pred_start': pred_start.strftime("%Y%m%d"),
+                'pred_end': pred_end.strftime("%Y%m%d"),
+            }
+            if (
+                st.session_state.get('base_prediction_result') is not None
+                and st.session_state.get('prediction_cache_key') == current_cache_key
+            ):
+                try:
+                    final_result, final_bt, final_trades_df = apply_strategy_to_prediction(
+                        st.session_state.base_prediction_result,
+                        n_buy,
+                        n_sell,
+                        n_newhigh,
+                        enable_chase,
+                        enable_stop_loss,
+                        enable_change_signal,
+                    )
+                    st.session_state.final_result = final_result
+                    st.session_state.final_bt = final_bt
+                    st.session_state.final_trades_df = final_trades_df
+                    st.session_state.n_buy_val = n_buy
+                    st.session_state.n_sell_val = n_sell
+                    st.session_state.n_newhigh_val = n_newhigh
+                    st.session_state.enable_chase_val = enable_chase
+                    st.session_state.enable_stop_loss_val = enable_stop_loss
+                    st.session_state.enable_change_signal_val = enable_change_signal
+                    render_backtest_outputs(
+                        final_result,
+                        final_bt,
+                        final_trades_df,
+                        symbol_code,
+                        pred_start,
+                        pred_end,
+                        chart_key="chart3_strategy",
+                    )
+                    render_prediction_model_download(symbol_code)
+                except Exception as e:
+                    st.error(f"策略回测刷新失败: {str(e)}")
+            elif st.session_state.get('base_prediction_result') is not None:
+                st.info("预测参数已变化，请点击“开始预测”生成新的模型预测缓存。")
 
 
     # =======================================
@@ -1031,12 +1270,14 @@ def main_product():
             with inc_col1:
                 inc_start_date = st.date_input(
                     "模型微调起始日期",
-                    st.session_state.get('pred_start', datetime(2021, 1, 1))
+                    st.session_state.get('pred_start', datetime(2021, 1, 1)),
+                    key="inc_start_tab3"
                 )
             with inc_col2:
                 inc_end_date = st.date_input(
                     "模型微调结束日期",
-                    st.session_state.get('pred_end', datetime.now())
+                    st.session_state.get('pred_end', datetime.now()),
+                    key="inc_end_tab3"
                 )
 
             # 学习率
@@ -1233,12 +1474,12 @@ def main_product():
                                 st.session_state.models['mixture_depth'],
                                 window_size=10,
                                 eval_mode=True,  # 只做回测，不要存最终结果
-                                N_buy=st.session_state.get('n_buy_val', 10),
-                                N_sell=st.session_state.get('n_sell_val', 10),
-                                N_newhigh=st.session_state.get('n_newhigh_val', 60),
-                                enable_chase=st.session_state.get('enable_chase_val', False),
-                                enable_stop_loss=st.session_state.get('enable_stop_loss_val', False),
-                                enable_change_signal=st.session_state.get('enable_change_signal_val', False),
+                                N_buy=1,
+                                N_sell=1,
+                                N_newhigh=60,
+                                enable_chase=False,
+                                enable_stop_loss=False,
+                                enable_change_signal=False,
                             )
                             current_excess = bt_result_temp.get('超额收益率', -np.inf)
                             if current_excess > best_excess_finetune:
@@ -1270,7 +1511,7 @@ def main_product():
                         st.warning("未发现可用的预测集数据，将使用微调数据区间进行回测展示。")
                         refreshed_new_df = add_df
 
-                    inc_final_result, inc_final_bt, inc_final_trades_df = predict_new_data(
+                    inc_base_result, inc_base_bt, _ = predict_new_data(
                         refreshed_new_df,
                         st.session_state.models['peak_model'],
                         st.session_state.models['peak_scaler'],
@@ -1286,15 +1527,26 @@ def main_product():
                         st.session_state.models['mixture_depth'],
                         window_size=10,
                         eval_mode=False,
-                        N_buy=st.session_state.get('n_buy_val', 10),
-                        N_sell=st.session_state.get('n_sell_val', 10),
-                        N_newhigh=st.session_state.get('n_newhigh_val', 60),
-                        enable_chase=st.session_state.get('enable_chase_val', False),
-                        enable_stop_loss=st.session_state.get('enable_stop_loss_val', False),
-                        enable_change_signal=st.session_state.get('enable_change_signal_val', False),
+                        N_buy=1,
+                        N_sell=1,
+                        N_newhigh=60,
+                        enable_chase=False,
+                        enable_stop_loss=False,
+                        enable_change_signal=False,
+                    )
+                    inc_final_result, inc_final_bt, inc_final_trades_df = apply_strategy_to_prediction(
+                        inc_base_result,
+                        st.session_state.get('n_buy_val', 10),
+                        st.session_state.get('n_sell_val', 10),
+                        st.session_state.get('n_newhigh_val', 60),
+                        st.session_state.get('enable_chase_val', False),
+                        st.session_state.get('enable_stop_loss_val', False),
+                        st.session_state.get('enable_change_signal_val', False),
                     )
 
                     # 保存微调后的结果
+                    st.session_state.inc_base_prediction_result = inc_base_result
+                    st.session_state.inc_base_selection_bt = inc_base_bt
                     st.session_state.inc_final_result = inc_final_result
                     st.session_state.inc_final_bt = inc_final_bt
 
@@ -1348,8 +1600,8 @@ def main_product():
                         st.markdown("**微调前预测**")
                         if st.session_state.final_result is not None:
                             orig_result = st.session_state.final_result.copy()
-                            peaks_pred_orig = orig_result[orig_result['高点标注'] == 1]
-                            troughs_pred_orig = orig_result[orig_result['低点标注'] == 1]
+                            peaks_pred_orig = orig_result[orig_result['Peak_Prediction'] == 1]
+                            troughs_pred_orig = orig_result[orig_result['Trough_Prediction'] == 1]
                             
                             fig_before = plot_candlestick(
                                 orig_result,
@@ -1426,9 +1678,9 @@ def main_product():
             st.markdown("### 预测参数（使用上传模型）")
             col_date1_up, col_date2_up = st.columns(2)
             with col_date1_up:
-                pred_start_up = st.date_input("预测开始日期", datetime(2021, 1, 1))
+                pred_start_up = st.date_input("预测开始日期", datetime(2021, 1, 1), key="pred_start_tab4")
             with col_date2_up:
-                pred_end_up = st.date_input("预测结束日期", datetime.now())
+                pred_end_up = st.date_input("预测结束日期", TARGET_PRED_END, key="pred_end_tab4")
 
             with st.expander("策略选择", expanded=False):
                 load_custom_css()
@@ -1495,7 +1747,7 @@ def main_product():
                     N_val = best_models.get('N', N)
                     mixture_val = best_models.get('mixture_depth', mixture_depth)
 
-                    final_result_up, final_bt_up, final_trades_df_up = predict_new_data(
+                    base_result_up, base_bt_up, _ = predict_new_data(
                         new_df_up,
                         best_models['peak_model'],
                         best_models['peak_scaler'],
@@ -1511,96 +1763,58 @@ def main_product():
                         mixture_val,
                         window_size=10,
                         eval_mode=False,
-                        N_buy=n_buy_up,
-                        N_sell=n_sell_up,
-                        N_newhigh=n_newhigh_up,
-                        enable_chase=enable_chase_up,
-                        enable_stop_loss=enable_stop_loss_up,
-                        enable_change_signal=enable_change_signal_up,
+                        N_buy=1,
+                        N_sell=1,
+                        N_newhigh=60,
+                        enable_chase=False,
+                        enable_stop_loss=False,
+                        enable_change_signal=False,
                     )
-                    st.success("预测完成！（使用已上传模型）")
-
-                    st.subheader("回测结果")
-                    metrics_up = [
-                        ('累计收益率',   final_bt_up.get('累计收益率', 0)),
-                        ('超额收益率',   final_bt_up.get('超额收益率', 0)),
-                        ('胜率',         final_bt_up.get('胜率', 0)),
-                        ('交易笔数',     final_bt_up.get('交易笔数', 0)),
-                        ('最大回撤',     final_bt_up.get('最大回撤', 0)),
-                        ('夏普比率',     final_bt_up.get('年化夏普比率', 0)),
-                    ]
-                    first_line_up = metrics_up[:3]
-                    cols_1_up = st.columns(3)
-                    for col, (name, value) in zip(cols_1_up, first_line_up):
-                        if isinstance(value, float):
-                            col.metric(name, f"{value*100:.2f}%")
-                        else:
-                            col.metric(name, f"{value}")
-                    second_line_up = metrics_up[3:]
-                    cols_2_up = st.columns(3)
-                    for col, (name, value) in zip(cols_2_up, second_line_up):
-                        if isinstance(value, float):
-                            col.metric(name, f"{value*100:.2f}%")
-                        else:
-                            col.metric(name, f"{value}")
-
-                    # 蜡烛图
-                    peaks_pred_up = final_result_up[final_result_up['Peak_Prediction'] == 1]
-                    troughs_pred_up = final_result_up[final_result_up['Trough_Prediction'] == 1]
-                    fig_up = plot_candlestick(
-                        final_result_up,
-                        symbol_code,
-                        pred_start_up.strftime("%Y%m%d"),
-                        pred_end_up.strftime("%Y%m%d"),
-                        peaks_pred_up,
-                        troughs_pred_up,
-                        prediction=True
-                    )
-                    st.plotly_chart(fig_up, use_container_width=True, key="chart_upload_tab")
-
-                    # 预测明细
-                    col_left_up, col_right_up = st.columns(2)
-                    final_result_up = final_result_up.rename(columns={
-                        'TradeDate': '交易日期',
-                        'Peak_Prediction': '高点标注',
-                        'Peak_Probability': '高点概率',
-                        'Trough_Prediction': '低点标注',
-                        'Trough_Probability': '低点概率'
-                    })
-                    with col_left_up:
-                        st.subheader("预测明细")
-                        st.dataframe(final_result_up[['交易日期', '高点标注', '高点概率', '低点标注', '低点概率']])
-
-                    # 交易记录
-                    final_trades_df_up = final_trades_df_up.rename(columns={
-                        "entry_date": '买入日',
-                        "signal_type_buy": '买入原因',
-                        "entry_price": '买入价',
-                        "exit_date": '卖出日',
-                        "signal_type_sell": '卖出原因',
-                        "exit_price": '卖出价',
-                        "hold_days": '持仓日',
-                        "return": '盈亏'
-                    })
-                    if not final_trades_df_up.empty:
-                        final_trades_df_up['盈亏'] = final_trades_df_up['盈亏'] * 100
-                        final_trades_df_up['买入日'] = final_trades_df_up['买入日'].dt.strftime('%Y-%m-%d')
-                        final_trades_df_up['卖出日'] = final_trades_df_up['卖出日'].dt.strftime('%Y-%m-%d')
-
-                    with col_right_up:
-                        st.subheader("交易记录")
-                        if not final_trades_df_up.empty:
-                            st.dataframe(
-                                final_trades_df_up[[
-                                    '买入日', '买入原因', '买入价',
-                                    '卖出日', '卖出原因', '卖出价',
-                                    '持仓日', '盈亏'
-                                ]].style.format({'盈亏': '{:.2f}%'})
-                            )
-                        else:
-                            st.write("暂无交易记录")
+                    st.session_state.upload_base_prediction_result = base_result_up.copy()
+                    st.session_state.upload_base_selection_bt = base_bt_up
+                    st.session_state.upload_prediction_cache_key = {
+                        'data_source': data_source,
+                        'symbol_code': symbol_code,
+                        'pred_start': pred_start_up.strftime("%Y%m%d"),
+                        'pred_end': pred_end_up.strftime("%Y%m%d"),
+                    }
+                    st.success("预测完成！（使用已上传模型，未叠加策略）")
                 except Exception as e:
                     st.error(f"预测失败: {str(e)}")
+
+            upload_cache_key = {
+                'data_source': data_source,
+                'symbol_code': symbol_code,
+                'pred_start': pred_start_up.strftime("%Y%m%d"),
+                'pred_end': pred_end_up.strftime("%Y%m%d"),
+            }
+            if (
+                st.session_state.get('upload_base_prediction_result') is not None
+                and st.session_state.get('upload_prediction_cache_key') == upload_cache_key
+            ):
+                try:
+                    final_result_up, final_bt_up, final_trades_df_up = apply_strategy_to_prediction(
+                        st.session_state.upload_base_prediction_result,
+                        n_buy_up,
+                        n_sell_up,
+                        n_newhigh_up,
+                        enable_chase_up,
+                        enable_stop_loss_up,
+                        enable_change_signal_up,
+                    )
+                    render_backtest_outputs(
+                        final_result_up,
+                        final_bt_up,
+                        final_trades_df_up,
+                        symbol_code,
+                        pred_start_up,
+                        pred_end_up,
+                        chart_key="chart_upload_tab_strategy",
+                    )
+                except Exception as e:
+                    st.error(f"上传模型策略回测刷新失败: {str(e)}")
+            elif st.session_state.get('upload_base_prediction_result') is not None:
+                st.info("上传模型预测参数已变化，请点击“开始预测(上传模型Tab)”生成新的模型预测缓存。")
 
 
 if __name__ == "__main__":
