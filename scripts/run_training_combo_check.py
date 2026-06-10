@@ -6,11 +6,11 @@ from itertools import product
 import numpy as np
 import pandas as pd
 
-from models import set_seed
-from preprocess import preprocess_data
-from train import train_model
-from predict import predict_new_data
-from tushare_function import select_time
+from src.models import set_seed
+from src.preprocess import preprocess_data
+from src.train import train_model
+from src.predict import predict_new_data
+from src.tushare_function import select_time
 
 set_seed(42)
 

@@ -6,12 +6,12 @@ from itertools import product
 import numpy as np
 import pandas as pd
 
-from models import set_seed
-from preprocess import preprocess_data
-from train import train_model
-from predict import get_trade_signal
-from backtest import backtest_results
-from tushare_function import read_day_from_tushare, select_time
+from src.models import set_seed
+from src.preprocess import preprocess_data
+from src.train import train_model
+from src.predict import get_trade_signal
+from src.backtest import backtest_results
+from src.tushare_function import read_day_from_tushare, select_time
 
 set_seed(42)
 

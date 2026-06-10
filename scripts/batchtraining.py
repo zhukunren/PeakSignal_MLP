@@ -29,12 +29,12 @@ import pandas as pd
 import torch
 
 # 从各模块导入所需函数（请确保相应模块在 PYTHONPATH 中）
-from models import set_seed, time_aware_oversampling
-from preprocess import preprocess_data, create_pos_neg_sequences_by_consecutive_labels
-from train import train_model
-from predict import predict_new_data
-from tushare_function import read_day_from_tushare, select_time
-from plot_candlestick import plot_candlestick
+from src.models import set_seed, time_aware_oversampling
+from src.preprocess import preprocess_data, create_pos_neg_sequences_by_consecutive_labels
+from src.train import train_model
+from src.predict import predict_new_data
+from src.tushare_function import read_day_from_tushare, select_time
+from src.plot_candlestick import plot_candlestick
 
 from WindPy import w
 w.start()

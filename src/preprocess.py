@@ -15,8 +15,8 @@ from sklearn.ensemble import RandomForestClassifier
 # compute_CCI, compute_williams_r, compute_zscore, compute_ADX, compute_TRIX, compute_ultimate_oscillator, compute_PPO,
 # compute_DPO, compute_KST, compute_KAMA, compute_EMA, compute_MoneyFlowIndex, identify_low_troughs, identify_high_peaks,
 # compute_SMA, compute_PercentageB, compute_AccumulationDistribution, compute_HighLow_Spread, compute_PriceChannel, compute_RenkoSlope
-from function import *
-from feature_expanded import generate_features
+from src.function import *
+from src.feature_expanded import generate_features
 #import streamlit as st
 
 # 封装相关性过滤函数

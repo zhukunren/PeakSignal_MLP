@@ -5,9 +5,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtest import backtest_results
-from plot_candlestick import plot_candlestick
-from predict import get_trade_signal
+from src.backtest import backtest_results
+from src.plot_candlestick import plot_candlestick
+from src.predict import get_trade_signal
 
 
 N_BUY = 10

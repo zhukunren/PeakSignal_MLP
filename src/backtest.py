@@ -1,6 +1,6 @@
 
 import numpy as np
-from function import *
+from src.function import *
 import pandas as pd
 import plotly.graph_objects as go
 

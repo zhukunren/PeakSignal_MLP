@@ -5,10 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from backtest import backtest_results
-from models import set_seed
-from predict import get_trade_signal
-from train import train_model
+from src.backtest import backtest_results
+from src.models import set_seed
+from src.predict import get_trade_signal
+from src.train import train_model
 
 
 N = 20
