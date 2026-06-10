@@ -6,8 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
-from src.models import set_seed
-from src.train import train_model
+from ml_trader.models.architectures import set_seed
+from ml_trader.models.trainer import train_model
 
 
 N = 20

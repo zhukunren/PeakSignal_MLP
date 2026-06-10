@@ -4,12 +4,12 @@ import traceback
 
 import pandas as pd
 
-from src.models import set_seed
-from src.preprocess import preprocess_data
-from src.train import train_model
-from src.predict import predict_new_data
-from src.tushare_function import select_time
-from src.plot_candlestick import plot_candlestick
+from ml_trader.models.architectures import set_seed
+from ml_trader.data.preprocessor import preprocess_data
+from ml_trader.models.trainer import train_model
+from ml_trader.models.predictor import predict_new_data
+from ml_trader.data.loader import select_time
+from ml_trader.visualization.plots import plot_candlestick
 
 set_seed(42)
 

@@ -10,11 +10,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.backtest import backtest_results
-from src.plot_candlestick import plot_candlestick
-from src.predict import get_trade_signal
-from src.preprocess import preprocess_data
-from src.tushare_function import read_day_from_tushare, select_time
+from ml_trader.trading.backtest import backtest_results
+from ml_trader.visualization.plots import plot_candlestick
+from ml_trader.models.predictor import get_trade_signal
+from ml_trader.data.preprocessor import preprocess_data
+from ml_trader.data.loader import read_day_from_tushare, select_time
 
 
 N = 20

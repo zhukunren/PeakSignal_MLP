@@ -15,11 +15,11 @@ from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE
 from imblearn.combine import SMOTEENN, SMOTETomek
 from joblib import Parallel, delayed, parallel_backend
 
-from src.preprocess import create_pos_neg_sequences_by_consecutive_labels
-from src.models import get_transformer_classifier, get_mlp_classifier
-from src.models import time_aware_oversampling
+from ml_trader.data.preprocessor import create_pos_neg_sequences_by_consecutive_labels
+from ml_trader.models.architectures import get_transformer_classifier, get_mlp_classifier
+from ml_trader.models.architectures import time_aware_oversampling
 
-from src.filter_feature import filter_features
+from ml_trader.features.selector import filter_features
 
 def identity_transform(x):
     return x

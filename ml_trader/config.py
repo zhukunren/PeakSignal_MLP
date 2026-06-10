@@ -1,0 +1,32 @@
+"""全局配置"""
+import os
+
+# 随机种子
+RANDOM_SEED = 42
+
+# 数据配置
+DATA_FILE = "完整数据.csv"
+TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+
+# 特征工程
+DEFAULT_WINDOW_SIZE = 20
+MIXTURE_DEPTH = 1
+
+# 模型配置
+CLASSIFIER_NAME = "MLP"  # MLP 或 Transformer
+OVERSAMPLE_METHOD = "SMOTE"
+BATCH_SIZE = 256
+EPOCHS = 50
+LEARNING_RATE = 0.001
+
+# 训练配置
+TRAIN_START = "20000101"
+TRAIN_END = "20201231"
+PRED_START = "20210101"
+PRED_END = "20260608"
+
+# 回测配置
+N_BUY = 10
+N_SELL = 10
+ENABLE_CHASE = False
+ENABLE_STOP_LOSS = False

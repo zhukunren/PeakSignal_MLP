@@ -1,10 +1,10 @@
 # predict.py
 import numpy as np
 import torch
-from src.preprocess import preprocess_data
+from ml_trader.data.preprocessor import preprocess_data
 from skorch import NeuralNetClassifier
-from src.backtest import backtest_results
-from src.models import  TransformerClassifier
+from ml_trader.trading.backtest import backtest_results
+from ml_trader.models.architectures import  TransformerClassifier
 import pandas as pd
 
 #绘图函数

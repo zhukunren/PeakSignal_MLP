@@ -11,14 +11,14 @@ import torch
 import torch.nn as nn
 import copy  # 新增，用于克隆初始模型
 import time
-from src.models import set_seed
-from src.preprocess import preprocess_data, create_pos_neg_sequences_by_consecutive_labels
-from src.train import train_model
-from src.predict import predict_new_data, get_trade_signal, change_trough_and_peak
-from src.backtest import backtest_results
-from src.tushare_function import read_day_from_tushare, select_time
-from src.plot_candlestick import plot_candlestick
-from src.models import time_aware_oversampling
+from ml_trader.models.architectures import set_seed
+from ml_trader.data.preprocessor import preprocess_data, create_pos_neg_sequences_by_consecutive_labels
+from ml_trader.models.trainer import train_model
+from ml_trader.models.predictor import predict_new_data, get_trade_signal, change_trough_and_peak
+from ml_trader.trading.backtest import backtest_results
+from ml_trader.data.loader import read_day_from_tushare, select_time
+from ml_trader.visualization.plots import plot_candlestick
+from ml_trader.models.architectures import time_aware_oversampling
 
 TARGET_REPRO_SEED_BASE = 7300
 TARGET_REPRO_BEST_ROUND = 8

@@ -15,8 +15,18 @@ from sklearn.ensemble import RandomForestClassifier
 # compute_CCI, compute_williams_r, compute_zscore, compute_ADX, compute_TRIX, compute_ultimate_oscillator, compute_PPO,
 # compute_DPO, compute_KST, compute_KAMA, compute_EMA, compute_MoneyFlowIndex, identify_low_troughs, identify_high_peaks,
 # compute_SMA, compute_PercentageB, compute_AccumulationDistribution, compute_HighLow_Spread, compute_PriceChannel, compute_RenkoSlope
-from src.function import *
-from src.feature_expanded import generate_features
+from ml_trader.features.indicators import (
+    compute_RSI, compute_MACD, compute_KD, compute_momentum, compute_ROC,
+    compute_Bollinger_Bands, compute_ATR, compute_volatility, compute_OBV,
+    compute_VWAP, compute_MFI, compute_CMF, compute_chaikin_oscillator,
+    compute_CCI, compute_williams_r, compute_zscore, compute_ADX, compute_TRIX,
+    compute_ultimate_oscillator, compute_PPO, compute_DPO, compute_KST,
+    compute_KAMA, compute_EMA, compute_MoneyFlowIndex, compute_SMA,
+    compute_PercentageB, compute_AccumulationDistribution, compute_HighLow_Spread,
+    compute_PriceChannel, compute_RenkoSlope
+)
+from ml_trader.features.patterns import identify_low_troughs, identify_high_peaks
+from ml_trader.features.engineering import generate_features
 #import streamlit as st
 
 # 封装相关性过滤函数

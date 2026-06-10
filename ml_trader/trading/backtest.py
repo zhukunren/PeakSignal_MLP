@@ -1,6 +1,6 @@
 
 import numpy as np
-from src.function import *
+from ml_trader.features.indicators import *
 import pandas as pd
 import plotly.graph_objects as go
 
