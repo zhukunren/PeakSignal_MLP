@@ -22,7 +22,7 @@ from ml_trader.models.architectures import time_aware_oversampling
 
 TARGET_REPRO_SEED_BASE = 7300
 TARGET_REPRO_BEST_ROUND = 8
-TARGET_PRED_END = datetime(2026, 6, 8)
+TARGET_PRED_END = datetime.now()
 
 # 设置随机种子
 set_seed(42)
@@ -177,7 +177,11 @@ def read_front_market_data(symbol_code, symbol_type, end_date):
     end_date = str(end_date)
 
     if symbol_type != "index" or symbol_code != "000001.SH":
-        return read_day_from_tushare(symbol_code, symbol_type, end_date=end_date)
+        raw = read_day_from_tushare(symbol_code, symbol_type, end_date=end_date)
+        raw = normalize_market_data(raw.reset_index(drop=True)) if not raw.empty else raw
+        if not raw.empty and raw["TradeDate"].max() < end_date:
+            st.warning(f"行情数据实际截止到 {raw['TradeDate'].max()}，早于你设置的预测截止日期 {end_date}。")
+        return raw
 
     local_raw = pd.DataFrame()
     try:
@@ -187,7 +191,10 @@ def read_front_market_data(symbol_code, symbol_type, end_date):
 
     if local_raw.empty:
         ts_df = read_day_from_tushare(symbol_code, symbol_type, end_date=end_date)
-        return normalize_market_data(ts_df.reset_index(drop=True))
+        raw = normalize_market_data(ts_df.reset_index(drop=True)) if not ts_df.empty else pd.DataFrame()
+        if not raw.empty and raw["TradeDate"].max() < end_date:
+            st.warning(f"行情数据实际截止到 {raw['TradeDate'].max()}，早于你设置的预测截止日期 {end_date}。")
+        return raw
 
     raw = local_raw.copy()
     if raw["TradeDate"].max() < end_date:
@@ -202,6 +209,8 @@ def read_front_market_data(symbol_code, symbol_type, end_date):
             )
 
     raw = raw[raw["TradeDate"] <= end_date].copy()
+    if not raw.empty and raw["TradeDate"].max() < end_date:
+        st.warning(f"行情数据实际截止到 {raw['TradeDate'].max()}，早于你设置的预测截止日期 {end_date}。")
     return raw.reset_index(drop=True)
 
 # ========== 模型微调的辅助函数 ========== #
@@ -551,83 +560,136 @@ def evaluate_finetune_effect(freeze_option):
         st.markdown(s)
 
 
+MODEL_EXPORT_REQUIRED_KEYS = (
+    "peak_model",
+    "peak_scaler",
+    "peak_selector",
+    "peak_selected_features",
+    "peak_threshold",
+    "trough_model",
+    "trough_scaler",
+    "trough_selector",
+    "trough_selected_features",
+    "trough_threshold",
+)
+
+
+def is_downloadable_model_dict(model_dict):
+    return isinstance(model_dict, dict) and all(key in model_dict for key in MODEL_EXPORT_REQUIRED_KEYS)
+
+
+def with_export_metadata(payload, saved_from, symbol_code):
+    export_payload = dict(payload)
+    export_payload.update({
+        "saved_from": saved_from,
+        "symbol_code": symbol_code,
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    return export_payload
+
+
+def render_model_download_options(symbol_code, key_prefix="model_download"):
+    """Render model export choices for the model artifacts currently held in session_state."""
+    options = []
+
+    current_models = st.session_state.get("models")
+    if is_downloadable_model_dict(current_models):
+        options.append({
+            "label": "当前模型（最新训练/微调）",
+            "file_prefix": "current_model",
+            "payload": with_export_metadata(current_models, "current_session_model", symbol_code),
+        })
+
+    selected_models = st.session_state.get("selected_prediction_models")
+    if is_downloadable_model_dict(selected_models):
+        selected_payload = with_export_metadata(selected_models, "prediction_best_combo", symbol_code)
+        selected_payload["selection_metric"] = "超额收益率"
+        selected_payload["strategy_applied_after_selection"] = True
+        if st.session_state.get("prediction_cache_key"):
+            selected_payload["prediction_cache_key"] = st.session_state.prediction_cache_key
+        if st.session_state.get("base_selection_bt"):
+            selected_payload["base_selection_bt"] = st.session_state.base_selection_bt
+        options.append({
+            "label": "预测选中的最佳组合模型",
+            "file_prefix": "best_combo_model",
+            "payload": selected_payload,
+        })
+
+    loaded_models = st.session_state.get("best_models")
+    if is_downloadable_model_dict(loaded_models):
+        options.append({
+            "label": "已加载/缓存模型",
+            "file_prefix": "loaded_model",
+            "payload": with_export_metadata(loaded_models, "loaded_or_cached_model", symbol_code),
+        })
+
+    if st.session_state.get("peak_models_list") and st.session_state.get("trough_models_list"):
+        training_payload = dict(current_models) if is_downloadable_model_dict(current_models) else {}
+        training_payload.update({
+            "peak_models_list": st.session_state.peak_models_list,
+            "trough_models_list": st.session_state.trough_models_list,
+            "N": st.session_state.models.get("N"),
+            "mixture_depth": st.session_state.models.get("mixture_depth"),
+            "seed_base": st.session_state.models.get("seed_base", TARGET_REPRO_SEED_BASE),
+            "target_round": st.session_state.models.get("target_round", TARGET_REPRO_BEST_ROUND),
+        })
+        options.append({
+            "label": "全部训练候选模型",
+            "file_prefix": "all_training_candidates",
+            "payload": with_export_metadata(training_payload, "all_training_candidates", symbol_code),
+        })
+
+    if st.session_state.get("peak_models_finetuned_list") and st.session_state.get("trough_models_finetuned_list"):
+        finetuned_payload = dict(current_models) if is_downloadable_model_dict(current_models) else {}
+        finetuned_payload.update({
+            "peak_models_finetuned_list": st.session_state.peak_models_finetuned_list,
+            "trough_models_finetuned_list": st.session_state.trough_models_finetuned_list,
+            "base_model_config": dict(st.session_state.models),
+            "finetune_params": st.session_state.get("finetune_params", {}),
+        })
+        options.append({
+            "label": "全部微调候选模型",
+            "file_prefix": "all_finetuned_candidates",
+            "payload": with_export_metadata(finetuned_payload, "all_finetuned_candidates", symbol_code),
+        })
+
+    if not options:
+        return
+
+    st.subheader("模型下载")
+    labels = [option["label"] for option in options]
+    col_choice, col_name = st.columns([2, 3])
+    with col_choice:
+        selected_label = st.selectbox("下载内容", labels, key=f"{key_prefix}_choice")
+
+    selected_option = options[labels.index(selected_label)]
+    default_name = f"{selected_option['file_prefix']}_{symbol_code}_{datetime.now().strftime('%Y%m%d')}"
+    with col_name:
+        model_name = st.text_input("模型文件名", default_name, key=f"{key_prefix}_name")
+
+    try:
+        model_bytes = pickle.dumps(selected_option["payload"])
+    except Exception as e:
+        st.error(f"模型打包失败: {str(e)}")
+        return
+
+    st.download_button(
+        label="下载模型文件",
+        data=model_bytes,
+        file_name=f"{model_name}.pkl",
+        mime="application/octet-stream",
+        key=f"{key_prefix}_button",
+    )
+
+
 # ========== 新增：模型保存功能 ========== #
 def add_model_save_functionality(symbol_code):
-    """添加微调后模型保存功能。"""
-    st.subheader("保存微调后的模型")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        model_name = st.text_input("模型文件名", f"finetune_model_{symbol_code}_{datetime.now().strftime('%Y%m%d')}")
-    
-    with col2:
-        if st.button("保存模型"):
-            try:
-                # 组织要保存的模型字典
-                models_to_save = {
-                    'peak_model': st.session_state.models['peak_model'],
-                    'peak_scaler': st.session_state.models['peak_scaler'],
-                    'peak_selector': st.session_state.models['peak_selector'],
-                    'peak_selected_features': st.session_state.models['peak_selected_features'],
-                    'peak_threshold': st.session_state.models['peak_threshold'],
-                    'trough_model': st.session_state.models['trough_model'],
-                    'trough_scaler': st.session_state.models['trough_scaler'],
-                    'trough_selector': st.session_state.models['trough_selector'],
-                    'trough_selected_features': st.session_state.models['trough_selected_features'],
-                    'trough_threshold': st.session_state.models['trough_threshold'],
-                    'N': st.session_state.models['N'],
-                    'mixture_depth': st.session_state.models['mixture_depth'],
-                    'finetune_params': st.session_state.finetune_params,
-                    'finetune_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-                
-                model_bytes = pickle.dumps(models_to_save)
-                
-                st.download_button(
-                    label="点击下载模型文件",
-                    data=model_bytes,
-                    file_name=f"{model_name}.pkl",
-                    mime="application/octet-stream"
-                )
-                st.success(f"模型已打包完成！点击上方按钮可下载 `{model_name}.pkl` 文件")
-            except Exception as e:
-                st.error(f"保存模型失败: {str(e)}")
+    """Render persistent model download controls after finetuning."""
+    render_model_download_options(symbol_code, key_prefix="finetune_model_download")
 
 
 def render_prediction_model_download(symbol_code, model_state_key="selected_prediction_models"):
-    models_to_save = st.session_state.get(model_state_key)
-    if not models_to_save:
-        return
-
-    export_models = dict(models_to_save)
-    export_models.update({
-        "saved_from": "prediction_best_combo",
-        "symbol_code": symbol_code,
-        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "selection_metric": "超额收益率",
-        "strategy_applied_after_selection": True,
-    })
-    if st.session_state.get("prediction_cache_key"):
-        export_models["prediction_cache_key"] = st.session_state.prediction_cache_key
-    if st.session_state.get("base_selection_bt"):
-        export_models["base_selection_bt"] = st.session_state.base_selection_bt
-    export_models["last_strategy_params"] = {
-        "N_buy": st.session_state.get("n_buy_val", 10),
-        "N_sell": st.session_state.get("n_sell_val", 10),
-        "N_newhigh": st.session_state.get("n_newhigh_val", 60),
-        "enable_chase": st.session_state.get("enable_chase_val", False),
-        "enable_stop_loss": st.session_state.get("enable_stop_loss_val", False),
-        "enable_change_signal": st.session_state.get("enable_change_signal_val", False),
-    }
-
-    default_name = f"best_combo_model_{symbol_code}_{datetime.now().strftime('%Y%m%d')}"
-    st.download_button(
-        label="保存当前组合模型文件",
-        data=pickle.dumps(export_models),
-        file_name=f"{default_name}.pkl",
-        mime="application/octet-stream",
-        key=f"download_{model_state_key}",
-    )
+    render_model_download_options(symbol_code, key_prefix=f"download_{model_state_key}")
 
 
 def apply_strategy_to_prediction(
@@ -919,6 +981,9 @@ def main_product():
                 st.success(f'训练完成，总耗时：{elapsed_time:.2f}秒')  # 显示在训练区块内
             except Exception as e:
                 st.error(f"训练失败: {str(e)}")
+
+        if st.session_state.get('trained') and is_downloadable_model_dict(st.session_state.get('models')):
+            render_model_download_options(symbol_code, key_prefix="tab1_model_download")
 
         # 训练集可视化（仅展示，不进行训练）
         try:
@@ -1650,12 +1715,12 @@ def main_product():
                     # ---- 评估微调效果 ----
                     evaluate_finetune_effect(freeze_option)
 
-                    # ---- 添加模型保存功能 ----
-                    add_model_save_functionality(symbol_code)
-
                 except Exception as e:
                     st.error(f"模型微调过程出现错误: {str(e)}")
                     st.exception(e)
+
+            if is_downloadable_model_dict(st.session_state.get('models')):
+                add_model_save_functionality(symbol_code)
 
 
     # =======================================
@@ -1676,6 +1741,7 @@ def main_product():
             st.warning("请先上传模型文件，或前往 [训练模型] 页面进行训练并保存。")
         else:
             st.markdown("### 预测参数（使用上传模型）")
+            render_model_download_options(symbol_code, key_prefix="tab4_model_download")
             col_date1_up, col_date2_up = st.columns(2)
             with col_date1_up:
                 pred_start_up = st.date_input("预测开始日期", datetime(2021, 1, 1), key="pred_start_tab4")
@@ -1737,18 +1803,19 @@ def main_product():
                 try:
                     best_models = st.session_state.best_models
                     symbol_type = 'index' if data_source == '指数' else 'stock'
-                    raw_data_up = read_day_from_tushare(symbol_code, symbol_type)
-                    raw_data_up, _ = preprocess_data(
-                        raw_data_up, N, mixture_depth, mark_labels=False
-                    )
-                    new_df_up = select_time(raw_data_up, pred_start_up.strftime("%Y%m%d"), pred_end_up.strftime("%Y%m%d"))
-
                     # 如果模型文件里保存了N、mixture_depth，则优先使用
                     N_val = best_models.get('N', N)
                     mixture_val = best_models.get('mixture_depth', mixture_depth)
+                    pred_start_up_str = pred_start_up.strftime("%Y%m%d")
+                    pred_end_up_str = pred_end_up.strftime("%Y%m%d")
+                    raw_data_up = read_front_market_data(
+                        symbol_code,
+                        symbol_type,
+                        end_date=pred_end_up_str
+                    )
 
                     base_result_up, base_bt_up, _ = predict_new_data(
-                        new_df_up,
+                        raw_data_up,
                         best_models['peak_model'],
                         best_models['peak_scaler'],
                         best_models['peak_selector'],
@@ -1769,14 +1836,16 @@ def main_product():
                         enable_chase=False,
                         enable_stop_loss=False,
                         enable_change_signal=False,
+                        backtest_start_date=pred_start_up_str,
+                        backtest_end_date=pred_end_up_str,
                     )
                     st.session_state.upload_base_prediction_result = base_result_up.copy()
                     st.session_state.upload_base_selection_bt = base_bt_up
                     st.session_state.upload_prediction_cache_key = {
                         'data_source': data_source,
                         'symbol_code': symbol_code,
-                        'pred_start': pred_start_up.strftime("%Y%m%d"),
-                        'pred_end': pred_end_up.strftime("%Y%m%d"),
+                        'pred_start': pred_start_up_str,
+                        'pred_end': pred_end_up_str,
                     }
                     st.success("预测完成！（使用已上传模型，未叠加策略）")
                 except Exception as e:

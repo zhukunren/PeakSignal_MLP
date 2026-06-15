@@ -1,5 +1,6 @@
 """全局配置"""
 import os
+from datetime import datetime
 
 # 随机种子
 RANDOM_SEED = 42
@@ -23,7 +24,7 @@ LEARNING_RATE = 0.001
 TRAIN_START = "20000101"
 TRAIN_END = "20201231"
 PRED_START = "20210101"
-PRED_END = "20260608"
+PRED_END = os.getenv("PRED_END", datetime.now().strftime("%Y%m%d"))
 
 # 回测配置
 N_BUY = 10

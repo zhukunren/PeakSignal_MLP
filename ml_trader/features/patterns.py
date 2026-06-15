@@ -1,3 +1,17 @@
+import os
+
+import numpy as np
+import pandas as pd
+
+from ml_trader.features.indicators import (
+    compute_MACD,
+    compute_OBV,
+    compute_volatility,
+    compute_VWAP,
+)
+
+
+def identify_high_peaks(df, window=3):
     df = df.copy()
     # 定义滚动窗口大小
     win = 2 * window + 1

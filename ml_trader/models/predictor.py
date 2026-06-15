@@ -86,7 +86,7 @@ def predict_new_data(
         print(f"Peak数据形状: {X_new_peak_scaled.shape}")
         
         from skorch import NeuralNetClassifier
-        from models import TransformerClassifier
+        from ml_trader.models.architectures import TransformerClassifier
         # 如果是 Transformer 模型，则构建时序数据
         if (hasattr(peak_model, "module_") and isinstance(peak_model.module_, TransformerClassifier)):
             print("创建 Peak 序列数据...")
@@ -289,7 +289,6 @@ def predict_new_data(
 
         # 如果是 Transformer 模型，需要构造序列数据
         from skorch import NeuralNetClassifier
-        from models import TransformerClassifier
         
         if (isinstance(peak_model, NeuralNetClassifier) and
             isinstance(peak_model.module_, TransformerClassifier)):
@@ -529,7 +528,6 @@ def predict_new_data_with_ensemble(
     import numpy as np
     import torch
     from skorch import NeuralNetClassifier
-    from models import TransformerClassifier  # 确保 TransformerClassifier 已定义
     # 预处理数据
     try:
         data_preprocessed, _ = preprocess_data(

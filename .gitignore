@@ -29,6 +29,12 @@ env/
 *_result.json
 *_report.json
 
+# Opt-in versioned model artifacts
+!saved_models/
+!saved_models/*.pkl
+!saved_models/*.joblib
+!saved_models/*.json
+
 # Training caches
 *_cache/
 fixed_feature_*_combo_cache/

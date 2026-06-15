@@ -657,3 +657,54 @@ def compute_ema_trend(series, period=14):
 # ---------- 高低点识别函数 ----------
 
 def identify_high_peaks(df, window=3):
+    df = df.copy()
+    # 定义滚动窗口大小
+    win = 2 * window + 1
+
+    # 使用 NumPy 快速计算滚动最大值
+    rolling_max = df['High'].rolling(window=win, center=True).max()
+
+    # 标记潜在高点（等于滚动窗口最大值）
+    df['PotentialPeak'] = (df['High'] == rolling_max).astype(int)
+
+    # 计算窗口内最大值出现的次数
+    rolling_max_counts = (
+        df['High']
+        .rolling(window=win, center=True)
+        .apply(lambda x: np.sum(x == np.max(x)), raw=True)
+    )
+
+    # 标记最终的高点：既是潜在高点，又是窗口中唯一最大值
+    df['Peak'] = ((df['PotentialPeak'] == 1) & (rolling_max_counts == 1)).astype(int)
+
+    # 清理临时列
+    df.drop(columns=['PotentialPeak'], inplace=True)
+
+    return df
+
+
+def identify_low_troughs(df, window=3):
+    df = df.copy()
+    # 定义滚动窗口大小
+    win = 2 * window + 1
+
+    # 使用 NumPy 快速计算滚动最小值
+    rolling_min = df['Low'].rolling(window=win, center=True).min()
+
+    # 标记潜在低点（等于滚动窗口最小值）
+    df['PotentialTrough'] = (df['Low'] == rolling_min).astype(int)
+
+    # 计算窗口内最小值出现的次数
+    rolling_min_counts = (
+        df['Low']
+        .rolling(window=win, center=True)
+        .apply(lambda x: np.sum(x == np.min(x)), raw=True)
+    )
+
+    # 标记最终的低点：既是潜在低点，又是窗口中唯一最小值
+    df['Trough'] = ((df['PotentialTrough'] == 1) & (rolling_min_counts == 1)).astype(int)
+
+    # 清理临时列
+    df.drop(columns=['PotentialTrough'], inplace=True)
+
+    return df

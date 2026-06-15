@@ -7,6 +7,10 @@ import time
 import traceback
 from pathlib import Path
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import numpy as np
 import pandas as pd
 
@@ -210,9 +214,10 @@ def run_worker(round_no, seed):
 
     log(f"开始训练第 {round_no}/{NUM_ROUNDS} 轮模型，seed={seed}")
     worker_log_path = WORKER_LOG_DIR / f"round_{round_no:03d}.log"
+    worker_script = Path(__file__).with_name("train_combo_round_worker.py")
     cmd = [
         sys.executable,
-        "train_combo_round_worker.py",
+        str(worker_script),
         "--round",
         str(round_no),
         "--seed",

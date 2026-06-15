@@ -25,7 +25,19 @@ from ml_trader.features.indicators import (
     compute_PercentageB, compute_AccumulationDistribution, compute_HighLow_Spread,
     compute_PriceChannel, compute_RenkoSlope
 )
-from ml_trader.features.patterns import identify_low_troughs, identify_high_peaks
+from ml_trader.features.patterns import (
+    compute_MACD_histogram,
+    compute_ichimoku,
+    compute_coppock_curve,
+    compute_chaikin_volatility,
+    compute_ease_of_movement,
+    compute_vortex_indicator,
+    compute_annualized_volatility,
+    compute_fisher_transform,
+    compute_CMO,
+    identify_low_troughs,
+    identify_high_peaks,
+)
 from ml_trader.features.engineering import generate_features
 #import streamlit as st
 

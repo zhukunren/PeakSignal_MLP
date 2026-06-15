@@ -2,6 +2,7 @@ import tushare as ts
 import pandas as pd
 import numpy as np
 import os
+from datetime import datetime
 
 
 def get_tushare_pro():
@@ -11,7 +12,7 @@ def get_tushare_pro():
     ts.set_token(token)
     return ts.pro_api()
 
-def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101', end_date='20260608'):
+def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101', end_date=None):
     """
     使用 Tushare API 获取股票或指数的全部日线行情数据。
     参数:
@@ -21,6 +22,7 @@ def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101
     - 包含日期、开高低收、成交量等列的DataFrame
     """
     symbol_type = symbol_type.lower()
+    end_date = datetime.now().strftime("%Y%m%d") if end_date is None else str(end_date)
     print(f"传递给 read_day_from_tushare 的 symbol_type: {symbol_type} (类型: {type(symbol_type)})")  # 调试输出
     print(f"尝试通过 Tushare 获取{symbol_type}数据: {symbol_code}")
     

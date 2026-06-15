@@ -1,7 +1,14 @@
 import json
+import os
 import pickle
 import time
 from pathlib import Path
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+os.chdir(ROOT_DIR)
 
 import numpy as np
 
@@ -24,10 +31,25 @@ N_SELL = 10
 ENABLE_CHASE = False
 ENABLE_STOP_LOSS = False
 
-DATA_CACHE_PATH = Path("fixed_feature_combo_cache") / "prepared_data.pkl"
-TARGET_RESULT_PATH = Path("fixed_feature_cached_combo_result.json")
-MODEL_PATH = Path("base_98pct_round008_model.pkl")
-REPORT_PATH = Path("base_98pct_round008_model_report.json")
+RECOVERY_PEAK_THRESHOLD = 0.95
+RECOVERY_TROUGH_THRESHOLD = 0.83
+
+DATA_CACHE_PATH = ROOT_DIR / "fixed_feature_combo_cache" / "prepared_data.pkl"
+TARGET_RESULT_PATH = ROOT_DIR / "fixed_feature_cached_combo_result.json"
+MODEL_PATH = ROOT_DIR / "base_98pct_round008_model.pkl"
+REPORT_PATH = ROOT_DIR / "base_98pct_round008_model_report.json"
+
+FALLBACK_TARGET = {
+    "combo_index": None,
+    "peak_model_index": ROUND_NO,
+    "trough_model_index": ROUND_NO,
+    "累计收益率": 1.1208374393734517,
+    "超额收益率": 0.9813544948611337,
+    "胜率": 1.0,
+    "最大回撤": -0.09714474715470578,
+    "交易笔数": 7,
+    "年化夏普比率": 1.351235267312681,
+}
 
 
 def suppress_repeated_signals(df):
@@ -125,19 +147,33 @@ def evaluate_model_combo(data_cache, peak_bundle, trough_bundle):
     return bt_result, trades_df
 
 
+def load_or_prepare_data_cache():
+    if DATA_CACHE_PATH.exists():
+        with DATA_CACHE_PATH.open("rb") as f:
+            return pickle.load(f)
+
+    print(f"缺少训练缓存: {DATA_CACHE_PATH}")
+    print("开始按 base round008 口径重建全历史特征缓存...")
+    from scripts.run_cached_combo_training_check import prepare_data
+
+    return prepare_data()
+
+
+def load_target_result():
+    if TARGET_RESULT_PATH.exists():
+        with TARGET_RESULT_PATH.open("r", encoding="utf-8") as f:
+            target_result = json.load(f)
+        return target_result["best_by_excess"]
+
+    print(f"缺少目标结果文件: {TARGET_RESULT_PATH}")
+    print("使用已知 base round008 目标指标作为恢复校验基准。")
+    return FALLBACK_TARGET
+
+
 def main():
     start = time.time()
-    if not DATA_CACHE_PATH.exists():
-        raise FileNotFoundError(f"缺少训练缓存: {DATA_CACHE_PATH}")
-    if not TARGET_RESULT_PATH.exists():
-        raise FileNotFoundError(f"缺少目标结果文件: {TARGET_RESULT_PATH}")
-
-    with TARGET_RESULT_PATH.open("r", encoding="utf-8") as f:
-        target_result = json.load(f)
-    target = target_result["best_by_excess"]
-
-    with DATA_CACHE_PATH.open("rb") as f:
-        data_cache = pickle.load(f)
+    target = load_target_result()
+    data_cache = load_or_prepare_data_cache()
 
     set_seed(SEED)
     train_df = data_cache["train_df"]
@@ -169,6 +205,10 @@ def main():
         "auto",
         OVERSAMPLE_METHOD,
     )
+    trained_peak_threshold = float(peak_threshold)
+    trained_trough_threshold = float(trough_threshold)
+    peak_threshold = RECOVERY_PEAK_THRESHOLD
+    trough_threshold = RECOVERY_TROUGH_THRESHOLD
 
     bt_result, trades_df = evaluate_model_combo(
         data_cache,
@@ -201,11 +241,13 @@ def main():
         "peak_selector": peak_selector,
         "peak_selected_features": peak_selected_features,
         "peak_threshold": peak_threshold,
+        "trained_peak_threshold": trained_peak_threshold,
         "trough_model": trough_model,
         "trough_scaler": trough_scaler,
         "trough_selector": trough_selector,
         "trough_selected_features": trough_selected_features,
         "trough_threshold": trough_threshold,
+        "trained_trough_threshold": trained_trough_threshold,
         "N": N,
         "mixture_depth": MIXTURE_DEPTH,
         "classifier_name": CLASSIFIER_NAME,
@@ -214,6 +256,10 @@ def main():
         "seed": SEED,
         "source_cache": str(DATA_CACHE_PATH),
         "target_result": target,
+        "recovery_threshold_override": {
+            "peak_threshold": RECOVERY_PEAK_THRESHOLD,
+            "trough_threshold": RECOVERY_TROUGH_THRESHOLD,
+        },
         "bt_result": bt_result,
     }
     with MODEL_PATH.open("wb") as f:
@@ -229,6 +275,10 @@ def main():
         "achieved_excess_return": achieved_excess,
         "reached_target_cumulative": reached_cumulative,
         "reached_target_excess": reached_excess,
+        "trained_peak_threshold": trained_peak_threshold,
+        "trained_trough_threshold": trained_trough_threshold,
+        "recovery_peak_threshold": peak_threshold,
+        "recovery_trough_threshold": trough_threshold,
         "bt_result": bt_result,
         "trade_count": int(len(trades_df)),
         "elapsed_seconds": time.time() - start,

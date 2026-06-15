@@ -2,6 +2,55 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
+
+def _prediction_signal_text(row):
+    signals = []
+    if row.get('Peak_Prediction', 0) == 1:
+        signals.append('高点')
+    if row.get('Trough_Prediction', 0) == 1:
+        signals.append('低点')
+    trade = row.get('trade')
+    if trade == 'buy':
+        signals.append('买入')
+    elif trade == 'sell':
+        signals.append('卖出')
+    return ' / '.join(signals) if signals else '无'
+
+
+def _format_probability(value):
+    value = pd.to_numeric(value, errors='coerce')
+    if pd.isna(value):
+        return '暂无'
+    return f'{value * 100:.2f}%'
+
+
+def _format_number(value, digits=2):
+    value = pd.to_numeric(value, errors='coerce')
+    if pd.isna(value):
+        return '暂无'
+    return f'{value:.{digits}f}'
+
+
+def _build_candlestick_hover_text(row):
+    lines = [
+        f"<b>{row.name.strftime('%Y-%m-%d')}</b>",
+        f"开盘: {_format_number(row.get('Open'))}",
+        f"最高: {_format_number(row.get('High'))}",
+        f"最低: {_format_number(row.get('Low'))}",
+        f"收盘: {_format_number(row.get('Close'))}",
+    ]
+    if 'Volume' in row.index:
+        volume = pd.to_numeric(row.get('Volume'), errors='coerce')
+        volume_text = '暂无' if pd.isna(volume) else f'{volume:,.0f}'
+        lines.append(f"成交量: {volume_text}")
+    lines.append(f"信号: {_prediction_signal_text(row)}")
+    if 'Peak_Probability' in row.index:
+        lines.append(f"高点概率: {_format_probability(row.get('Peak_Probability'))}")
+    if 'Trough_Probability' in row.index:
+        lines.append(f"低点概率: {_format_probability(row.get('Trough_Probability'))}")
+    return '<br>'.join(lines)
+
+
 def plot_candlestick(data, stock_code, start_date, end_date, 
                      peaks=None, troughs=None, 
                      prediction=False, selected_classifiers=None, 
@@ -13,6 +62,13 @@ def plot_candlestick(data, stock_code, start_date, end_date,
     # 过滤数据只保留在 start_date 到 end_date 之间的数据
     data = data[(data.index >= start_date) & (data.index <= end_date)]
     print(data.head(5))
+    data = data.copy()
+    if 'Peak_Probability' in data.columns:
+        data['Peak_Probability'] = pd.to_numeric(data['Peak_Probability'], errors='coerce')
+    if 'Trough_Probability' in data.columns:
+        data['Trough_Probability'] = pd.to_numeric(data['Trough_Probability'], errors='coerce')
+    data['_HoverText'] = data.apply(_build_candlestick_hover_text, axis=1)
+
     # 建立双子图：上方K线，下方成交量
     fig = make_subplots(
         rows=2, cols=1,
@@ -33,7 +89,8 @@ def plot_candlestick(data, stock_code, start_date, end_date,
         name=stock_code,
         increasing=dict(line=dict(color='red')),
         decreasing=dict(line=dict(color='green')),
-        hoverinfo='x+y+text'
+        text=data['_HoverText'],
+        hoverinfo='text'
     ), row=1, col=1)
 
     # (2) 绘制成交量
@@ -62,7 +119,18 @@ def plot_candlestick(data, stock_code, start_date, end_date,
             mode='text',
             text='W',
             textfont=dict(color=color_peak, size=20),
-            name=label_peak
+            name=label_peak,
+            customdata=peaks[['Peak_Probability']] if 'Peak_Probability' in peaks.columns else None,
+            hovertemplate=(
+                '<b>%{x|%Y-%m-%d}</b><br>'
+                f'{label_peak}<br>'
+                '高点概率: %{customdata[0]:.2%}'
+                '<extra></extra>'
+            ) if 'Peak_Probability' in peaks.columns else (
+                '<b>%{x|%Y-%m-%d}</b><br>'
+                f'{label_peak}'
+                '<extra></extra>'
+            )
         ), row=1, col=1)
 
     if troughs is not None and not troughs.empty:
@@ -76,7 +144,18 @@ def plot_candlestick(data, stock_code, start_date, end_date,
             mode='text',
             text='D',
             textfont=dict(color=color_trough, size=20),
-            name=label_trough
+            name=label_trough,
+            customdata=troughs[['Trough_Probability']] if 'Trough_Probability' in troughs.columns else None,
+            hovertemplate=(
+                '<b>%{x|%Y-%m-%d}</b><br>'
+                f'{label_trough}<br>'
+                '低点概率: %{customdata[0]:.2%}'
+                '<extra></extra>'
+            ) if 'Trough_Probability' in troughs.columns else (
+                '<b>%{x|%Y-%m-%d}</b><br>'
+                f'{label_trough}'
+                '<extra></extra>'
+            )
         ), row=1, col=1)
 
     # (4) 如果含有 trade 列，则标注买/卖点
