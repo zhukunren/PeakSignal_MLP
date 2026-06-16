@@ -14,7 +14,12 @@ import time
 from ml_trader.models.architectures import set_seed
 from ml_trader.data.preprocessor import preprocess_data, create_pos_neg_sequences_by_consecutive_labels
 from ml_trader.models.trainer import train_model
-from ml_trader.models.predictor import predict_new_data, get_trade_signal, change_trough_and_peak
+from ml_trader.models.predictor import (
+    predict_event_regime_model_data,
+    predict_new_data,
+    get_trade_signal,
+    change_trough_and_peak,
+)
 from ml_trader.trading.backtest import backtest_results
 from ml_trader.data.loader import read_day_from_tushare, select_time
 from ml_trader.visualization.plots import plot_candlestick
@@ -1814,31 +1819,46 @@ def main_product():
                         end_date=pred_end_up_str
                     )
 
-                    base_result_up, base_bt_up, _ = predict_new_data(
-                        raw_data_up,
-                        best_models['peak_model'],
-                        best_models['peak_scaler'],
-                        best_models['peak_selector'],
-                        best_models['peak_selected_features'],
-                        best_models['peak_threshold'],
-                        best_models['trough_model'],
-                        best_models['trough_scaler'],
-                        best_models['trough_selector'],
-                        best_models['trough_selected_features'],
-                        best_models['trough_threshold'],
-                        N_val,
-                        mixture_val,
-                        window_size=10,
-                        eval_mode=False,
-                        N_buy=1,
-                        N_sell=1,
-                        N_newhigh=60,
-                        enable_chase=False,
-                        enable_stop_loss=False,
-                        enable_change_signal=False,
-                        backtest_start_date=pred_start_up_str,
-                        backtest_end_date=pred_end_up_str,
-                    )
+                    if best_models.get("model_type") == "event_regime_hgbr_combo":
+                        base_result_up, base_bt_up, _ = predict_event_regime_model_data(
+                            raw_data_up,
+                            best_models,
+                            eval_mode=False,
+                            N_buy=1,
+                            N_sell=1,
+                            N_newhigh=60,
+                            enable_chase=False,
+                            enable_stop_loss=False,
+                            enable_change_signal=False,
+                            backtest_start_date=pred_start_up_str,
+                            backtest_end_date=pred_end_up_str,
+                        )
+                    else:
+                        base_result_up, base_bt_up, _ = predict_new_data(
+                            raw_data_up,
+                            best_models['peak_model'],
+                            best_models['peak_scaler'],
+                            best_models['peak_selector'],
+                            best_models['peak_selected_features'],
+                            best_models['peak_threshold'],
+                            best_models['trough_model'],
+                            best_models['trough_scaler'],
+                            best_models['trough_selector'],
+                            best_models['trough_selected_features'],
+                            best_models['trough_threshold'],
+                            N_val,
+                            mixture_val,
+                            window_size=10,
+                            eval_mode=False,
+                            N_buy=1,
+                            N_sell=1,
+                            N_newhigh=60,
+                            enable_chase=False,
+                            enable_stop_loss=False,
+                            enable_change_signal=False,
+                            backtest_start_date=pred_start_up_str,
+                            backtest_end_date=pred_end_up_str,
+                        )
                     st.session_state.upload_base_prediction_result = base_result_up.copy()
                     st.session_state.upload_base_selection_bt = base_bt_up
                     st.session_state.upload_prediction_cache_key = {

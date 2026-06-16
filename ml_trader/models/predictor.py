@@ -6,6 +6,8 @@ from skorch import NeuralNetClassifier
 from ml_trader.trading.backtest import backtest_results
 from ml_trader.models.architectures import  TransformerClassifier
 import pandas as pd
+import pickle
+from pathlib import Path
 
 #绘图函数
 
@@ -49,6 +51,274 @@ def merge_trades(data_preprocessed, trades_df):
     data_preprocessed.index = original_index
 
     return data_preprocessed
+
+
+def _predict_probability_array(data_preprocessed, model, scaler, selector, selected_features):
+    data = data_preprocessed.copy()
+    for feature in selected_features:
+        if feature not in data.columns:
+            data[feature] = 0
+
+    x_new = data[selected_features].fillna(0)
+    x_scaled = scaler.transform(x_new).astype(np.float32)
+    x_model = selector.transform(x_scaled) if selector is not None else x_scaled
+
+    if hasattr(model, "predict_proba"):
+        logits = model.predict_proba(x_model)
+        if getattr(logits, "ndim", 1) == 2:
+            return logits[:, 1].astype(np.float32)
+        return logits.astype(np.float32)
+
+    return model.predict(x_model).astype(np.float32)
+
+
+def _suppress_repeated_signal_array(signal, window):
+    result = np.asarray(signal).astype(np.int8).copy()
+    if window <= 0:
+        return result
+
+    idx = 0
+    n_rows = len(result)
+    while idx < n_rows:
+        if result[idx] == 1:
+            result[idx + 1 : min(idx + window + 1, n_rows)] = 0
+            idx += window + 1
+        else:
+            idx += 1
+    return result
+
+
+def _add_event_sequence_features(df, feature_names):
+    data = df.copy()
+    features = list(feature_names)
+    sequence_source_features = [
+        "Return_5",
+        "Return_20",
+        "Return_60",
+        "Drawdown_20",
+        "Drawdown_60",
+        "Price_Position_20",
+        "Price_Position_60",
+        "RSI_Signal",
+        "MACD_Diff_Pct",
+        "Bollinger_Position",
+        "Volume_Ratio_20",
+        "ATR_14_Pct",
+    ]
+
+    generated = {}
+    for column in sequence_source_features:
+        if column not in data.columns:
+            continue
+        for lag in (1, 3, 5, 10, 20):
+            feature = f"{column}_lag{lag}"
+            generated[feature] = data[column].shift(lag)
+            features.append(feature)
+        for window in (5, 10, 20, 60):
+            mean_feature = f"{column}_mean{window}"
+            min_feature = f"{column}_min{window}"
+            max_feature = f"{column}_max{window}"
+            rolling = data[column].rolling(window, min_periods=1)
+            generated[mean_feature] = rolling.mean()
+            generated[min_feature] = rolling.min()
+            generated[max_feature] = rolling.max()
+            features.extend([mean_feature, min_feature, max_feature])
+
+    if generated:
+        data = pd.concat([data, pd.DataFrame(generated, index=data.index)], axis=1)
+
+    features = list(dict.fromkeys(feature for feature in features if feature in data.columns))
+    data[features] = data[features].replace([np.inf, -np.inf], np.nan).fillna(0)
+    return data, features
+
+
+def _load_event_base_model(event_model_package):
+    if "base_model" in event_model_package:
+        return event_model_package["base_model"]
+
+    candidates = []
+    base_model_path = event_model_package.get("base_model_path")
+    if base_model_path:
+        candidates.append(Path(base_model_path))
+        candidates.append(Path.cwd() / base_model_path)
+    candidates.append(Path.cwd() / "base_98pct_round008_model.pkl")
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                with candidate.open("rb") as f:
+                    return pickle.load(f)
+        except OSError:
+            continue
+
+    raise FileNotFoundError("事件组合模型需要 base_98pct_round008_model.pkl，当前路径未找到。")
+
+
+def _parse_trade_dates(trade_date_series):
+    return pd.to_datetime(
+        trade_date_series.astype(str).str.replace("-", "", regex=False),
+        format="%Y%m%d",
+        errors="coerce",
+    )
+
+
+def predict_event_regime_model_data(
+    new_df,
+    event_model_package,
+    eval_mode=False,
+    N_buy=None,
+    N_sell=None,
+    enable_chase=False,
+    enable_stop_loss=False,
+    enable_change_signal=False,
+    N_newhigh=60,
+    backtest_start_date=None,
+    backtest_end_date=None,
+):
+    """
+    Predict with the event-regime combo model saved by scripts/train_event_regime_model.py.
+
+    The uploaded model is not a legacy Peak/Trough model. It combines:
+    - the saved base Peak/Trough model probabilities;
+    - event buy/sell regressors;
+    - a regime gate for event buys.
+    """
+    if event_model_package.get("model_type") != "event_regime_hgbr_combo":
+        raise ValueError("不是 event_regime_hgbr_combo 模型。")
+
+    base_model = _load_event_base_model(event_model_package)
+    params = event_model_package.get("params", {})
+    N = base_model.get("N", 20)
+    mixture_depth = base_model.get("mixture_depth", 1)
+
+    data_preprocessed, all_features = preprocess_data(
+        new_df,
+        N,
+        mixture_depth=mixture_depth,
+        mark_labels=eval_mode,
+    )
+    if not isinstance(data_preprocessed.index, pd.DatetimeIndex):
+        data_preprocessed.index = pd.to_datetime(data_preprocessed.index)
+
+    base_peak_probability = _predict_probability_array(
+        data_preprocessed,
+        base_model["peak_model"],
+        base_model["peak_scaler"],
+        base_model["peak_selector"],
+        base_model["peak_selected_features"],
+    )
+    base_trough_probability = _predict_probability_array(
+        data_preprocessed,
+        base_model["trough_model"],
+        base_model["trough_scaler"],
+        base_model["trough_selector"],
+        base_model["trough_selected_features"],
+    )
+
+    event_features = event_model_package.get("event_features") or all_features
+    event_df, _ = _add_event_sequence_features(data_preprocessed, event_features)
+    for feature in event_features:
+        if feature not in event_df.columns:
+            event_df[feature] = 0
+    x_event = event_df[event_features].fillna(0).to_numpy(np.float32)
+    event_buy_score = event_model_package["event_buy_model"].predict(x_event).astype(np.float32)
+    event_sell_score = event_model_package["event_sell_model"].predict(x_event).astype(np.float32)
+
+    data_preprocessed["Base_Peak_Probability"] = base_peak_probability
+    data_preprocessed["Base_Trough_Probability"] = base_trough_probability
+    data_preprocessed["Event_Buy_Score"] = event_buy_score
+    data_preprocessed["Event_Sell_Score"] = event_sell_score
+
+    if backtest_start_date is not None or backtest_end_date is not None:
+        trade_dates = _parse_trade_dates(data_preprocessed["TradeDate"])
+        mask = pd.Series(True, index=data_preprocessed.index)
+        if backtest_start_date is not None:
+            mask &= trade_dates >= pd.to_datetime(str(backtest_start_date), format="%Y%m%d", errors="coerce")
+        if backtest_end_date is not None:
+            mask &= trade_dates <= pd.to_datetime(str(backtest_end_date), format="%Y%m%d", errors="coerce")
+        data_preprocessed = data_preprocessed.loc[mask].copy()
+
+    base_peak_probability = data_preprocessed["Base_Peak_Probability"].to_numpy(dtype=float)
+    base_trough_probability = data_preprocessed["Base_Trough_Probability"].to_numpy(dtype=float)
+    event_buy_score = data_preprocessed["Event_Buy_Score"].to_numpy(dtype=float)
+    event_sell_score = data_preprocessed["Event_Sell_Score"].to_numpy(dtype=float)
+
+    base_peak_threshold = params.get("base_peak_threshold", 0.94)
+    base_trough_threshold = params.get("base_trough_threshold", 0.54)
+    base_signal_window = params.get("base_signal_window", 20)
+    event_buy_threshold = params.get("event_buy_threshold", 0.038293278403530355)
+    event_sell_threshold = params.get("event_sell_threshold", 0.03924646855558505)
+    event_signal_window = params.get("event_signal_window", 40)
+
+    base_buy = _suppress_repeated_signal_array(base_trough_probability > base_trough_threshold, base_signal_window)
+    base_sell = _suppress_repeated_signal_array(base_peak_probability > base_peak_threshold, base_signal_window)
+    if "Close_MA200_Diff" in data_preprocessed.columns:
+        regime_gate = data_preprocessed["Close_MA200_Diff"].to_numpy(dtype=float) > 0
+    else:
+        regime_gate = np.ones(len(data_preprocessed), dtype=bool)
+    event_buy = _suppress_repeated_signal_array(
+        (event_buy_score >= event_buy_threshold) & regime_gate,
+        event_signal_window,
+    )
+    event_sell = _suppress_repeated_signal_array(event_sell_score >= event_sell_threshold, event_signal_window)
+
+    data_preprocessed["Event_Regime_Gate"] = regime_gate.astype(np.int8)
+    data_preprocessed["Base_Trough_Signal"] = base_buy
+    data_preprocessed["Base_Peak_Signal"] = base_sell
+    data_preprocessed["Event_Trough_Signal"] = event_buy
+    data_preprocessed["Event_Peak_Signal"] = event_sell
+    data_preprocessed["Trough_Probability"] = np.maximum(base_trough_probability, event_buy_score)
+    data_preprocessed["Peak_Probability"] = np.maximum(base_peak_probability, event_sell_score)
+    data_preprocessed["Trough_Prediction"] = np.maximum(base_buy, event_buy).astype(int)
+    data_preprocessed["Peak_Prediction"] = np.maximum(base_sell, event_sell).astype(int)
+
+    if enable_change_signal:
+        data_preprocessed = change_trough_and_peak(data_preprocessed, N_newhigh)
+
+    signal_df = get_trade_signal(data_preprocessed)
+    bt_result, trades_df = backtest_results(
+        data_preprocessed,
+        signal_df,
+        N_buy,
+        N_sell,
+        enable_chase,
+        enable_stop_loss,
+        initial_capital=1_000_000,
+    )
+
+    if trades_df.empty:
+        data_preprocessed["trade"] = None
+    else:
+        data_preprocessed["date"] = _parse_trade_dates(data_preprocessed["TradeDate"])
+        data_preprocessed["trade"] = None
+        data_preprocessed = pd.merge(
+            data_preprocessed,
+            trades_df[["exit_date"]],
+            left_on="date",
+            right_on="exit_date",
+            how="left",
+        )
+        data_preprocessed["trade"] = np.where(
+            data_preprocessed["exit_date"].notna(),
+            "sell",
+            data_preprocessed["trade"],
+        )
+        data_preprocessed = pd.merge(
+            data_preprocessed,
+            trades_df[["entry_date"]],
+            left_on="date",
+            right_on="entry_date",
+            how="left",
+        )
+        data_preprocessed["trade"] = np.where(
+            data_preprocessed["entry_date"].notna(),
+            "buy",
+            data_preprocessed["trade"],
+        )
+        data_preprocessed = data_preprocessed.drop_duplicates(subset=["date"])
+        data_preprocessed.set_index("date", inplace=True)
+
+    return data_preprocessed, bt_result, trades_df
 
 '''
 def predict_new_data(
