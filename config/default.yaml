@@ -1,0 +1,151 @@
+# 默认配置文件
+# 项目：东吴秀享AI超额收益系统
+
+# 应用配置
+app:
+  name: "东吴秀享AI超额收益系统"
+  version: "0.1.0"
+  environment: "development"
+  page_title: "东吴秀享AI超额收益系统"
+  layout: "wide"
+  initial_sidebar_state: "auto"
+
+# 训练配置
+training:
+  # 随机种子配置
+  # 来源：2020年回测实验，7300-7310 系列表现最佳
+  # 实验记录：第8轮(seed=7308)达到98.13%超额收益
+  seed_base: 7300
+  best_round: 8
+  num_rounds: 10
+
+  # 训练数据范围
+  default_train_start: "2000-01-01"
+  default_train_end: "2020-12-31"
+
+  # 模型训练参数
+  patience: 3
+  val_size: 0.2
+  test_size: 0.2
+  early_stopping_rounds: 10
+
+  # 默认分类器
+  default_classifier: "MLP"  # MLP 或 Transformer
+
+# 预测配置
+prediction:
+  # 预测数据范围
+  default_pred_start: "2021-01-01"
+  # default_pred_end 使用当前日期
+
+  # 组合搜索配置
+  use_best_combo: true
+
+  # 组合搜索时的策略参数（简化版，用于快速筛选）
+  combo_search:
+    enable_chase: false
+    enable_stop_loss: false
+    enable_change_signal: false
+    n_buy: 1
+    n_sell: 1
+    n_newhigh: 60
+
+# 特征工程配置
+features:
+  # 特征生成参数
+  N: 20  # 峰谷识别窗口
+  mixture_depth: 1  # 混合因子深度
+
+  # 特征筛选参数
+  correlation_threshold: 0.95  # 相关性过滤阈值
+  variance_threshold: 0.0001   # 方差过滤阈值
+
+  # PCA 降维
+  pca:
+    enable: true
+    max_components: 100
+
+  # 过采样方法
+  oversample_methods:
+    - "SMOTE"
+    - "ADASYN"
+    - "BorderlineSMOTE"
+    - "时间感知过采样"
+
+# 模型微调配置
+finetune:
+  # 学习率选项
+  learning_rates:
+    极低: 1.0e-6
+    低: 1.0e-5
+    中: 1.0e-4
+    高: 1.0e-3
+
+  default_lr: 1.0e-5
+  default_epochs: 20
+  default_mix_ratio: 0.2  # 新旧数据混合比例
+
+  # 冻结策略
+  freeze_strategies:
+    - "不冻结"
+    - "冻结第一层"
+    - "冻结第二层"
+    - "部分冻结"
+
+# 回测配置
+backtest:
+  initial_capital: 1000000  # 初始资金
+  commission_rate: 0.0003   # 手续费率
+
+  # 策略参数
+  strategy:
+    # 追涨参数
+    chase:
+      default_n_buy: 10
+      default_n_sell: 10
+
+    # 信号调整
+    signal_adjustment:
+      default_n_newhigh: 60
+
+# 数据配置
+data:
+  # 数据存储路径
+  cache_dir: "cache/"
+  models_dir: "saved_models/"
+  experiments_dir: "experiments/"
+  data_file: "完整数据.csv"
+
+  # Tushare 配置（从环境变量读取）
+  tushare_token: ${TUSHARE_TOKEN}
+
+  # 数据源
+  default_symbol: "000001.SH"  # 上证指数
+  default_symbol_type: "index"
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/app.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
+
+# UI配置
+ui:
+  # 数据源选项
+  data_sources:
+    - "指数"
+    - "股票"
+
+  # 分类器选项
+  classifiers:
+    - "MLP"
+    - "Transformer"
+
+  # 过采样方法选项
+  oversample_options:
+    - "SMOTE"
+    - "ADASYN"
+    - "BorderlineSMOTE"
+    - "时间感知过采样"

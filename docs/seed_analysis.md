@@ -75,9 +75,9 @@ for i in range(num_rounds):
    - 可能是项目早期实验中发现的"运气好"的种子
    - 后续固化为配置常量
 
-**验证依据**：
+**历史验证依据**：
 ```json
-// base_98pct_round008_model_report.json
+// 本地实验报告，按需重新生成，不保留在仓库根目录
 {
   "round_no": 8,
   "seed": 7308,  // = 7300 + 8
@@ -96,8 +96,8 @@ for i in range(num_rounds):
 ### 3. **seed = 7308** (最佳模型种子)
 
 **位置**：
-- `base_98pct_round008_model_report.json:4`
-- 代码中通过 `TARGET_REPRO_SEED_BASE + 8` 计算得到
+- `config/default.yaml` 中的 `training.seed_base` 和 `training.best_round`
+- 训练服务中按 `seed_base + round_index` 计算每轮种子
 
 **类型**：**实验发现的最优种子**
 
@@ -130,12 +130,12 @@ for i in range(num_rounds):
 
 **如何使用**：
 ```python
-# app.py 中的配置
-TARGET_REPRO_SEED_BASE = 7300
-TARGET_REPRO_BEST_ROUND = 8
+# config/default.yaml
+seed_base = 7300
+best_round = 8
 
-# 训练时会保存第8轮模型
-model_path = "base_98pct_round008_model.pkl"
+# 第8轮对应 seed=7308
+seed = seed_base + best_round
 ```
 
 **结论**：⚠️ **是魔法数字**，但通过实验选出。

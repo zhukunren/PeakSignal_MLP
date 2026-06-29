@@ -1,259 +1,100 @@
-# 快速行动指南
+# 快速使用指南
 
-## 🎯 核心建议（TL;DR）
+## 1. 安装环境
 
-**整体评分**: 7.5/10 - 项目有良好基础，但需要改进可维护性
-
-**立即行动的3件事**:
-1. 🔴 **添加单元测试**（第1优先级，2-4周）
-2. 🔴 **拆分 app.py**（第1优先级，2周）
-3. 🟡 **引入配置管理**（第2优先级，1周）
-
----
-
-## 📊 问题优先级矩阵
-
-```
-紧急且重要 ↑               │ 🔴 添加单元测试
-                           │ 🔴 拆分 app.py
-                           │
-────────────────────────────┼────────────────────────
-重要但不紧急 ↑             │ 🟡 配置管理
-                           │ 🟡 数据流重构
-                           │ 🟢 性能优化
-                           │
-                紧急程度 →
-```
-
----
-
-## 🚀 30天改进计划
-
-### 第1周: 测试基础设施
-
-**目标**: 建立测试体系
-
-- [ ] Day 1-2: 安装 pytest，创建 tests/ 目录结构
-- [ ] Day 3-4: 为 features/indicators.py 写测试（RSI, MACD, KD）
-- [ ] Day 5: 为 trading/backtest.py 写测试
-- [ ] **里程碑**: 测试覆盖率达到 20%
-
-### 第2周: 关键模块测试
-
-**目标**: 覆盖核心业务逻辑
-
-- [ ] Day 6-7: 为 data/preprocessor.py 写测试
-- [ ] Day 8-9: 为 models/trainer.py 写测试（简化版）
-- [ ] Day 10: 集成测试（端到端流程）
-- [ ] **里程碑**: 测试覆盖率达到 40%
-
-### 第3周: app.py 重构
-
-**目标**: 拆分 UI 和业务逻辑
-
-- [ ] Day 11-12: 提取配置到 config.py
-- [ ] Day 13-14: 创建 services/ 层（training_service, prediction_service）
-- [ ] Day 15: 拆分 Tab1（训练页面）到独立文件
-- [ ] **里程碑**: app.py 减少到 1000 行
-
-### 第4周: 完成重构
-
-**目标**: 完成模块化改造
-
-- [ ] Day 16-17: 拆分 Tab2-4 到独立页面文件
-- [ ] Day 18-19: 提取 UI 组件（metrics_display, model_download）
-- [ ] Day 20: 全面测试，确保功能正常
-- [ ] **里程碑**: app.py 减少到 300 行，测试覆盖率 60%
-
----
-
-## 📋 详细改进清单
-
-### 立即行动（本周）
-
-#### 1. 创建测试框架
 ```powershell
-# 安装依赖
-pip install pytest pytest-cov pytest-mock
-
-# 创建目录
-mkdir tests
-mkdir tests/unit tests/integration tests/fixtures
-
-# 创建第一个测试
-# tests/unit/test_features/test_indicators.py
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-#### 2. 添加配置文件
+在 `.env` 中填写：
+
+```text
+TUSHARE_TOKEN=your_token_here
+```
+
+也可以临时在当前 PowerShell 会话中设置：
+
 ```powershell
-mkdir config
-# 创建 config/default.yaml
+$env:TUSHARE_TOKEN="your_token_here"
 ```
 
-#### 3. 提取硬编码配置
-```python
-# 从 app.py 提取
-TARGET_REPRO_SEED_BASE = 7300  # → config.yaml
-TARGET_REPRO_BEST_ROUND = 8    # → config.yaml
-```
+## 2. 启动应用
 
----
-
-### 短期改进（2-4周）
-
-#### 1. 拆分 app.py
-- 创建 `app/services/` 目录
-- 提取 `TrainingService`, `PredictionService`
-- 创建 `app/pages/` 目录
-- 每个 Tab 独立文件
-
-#### 2. 完善测试
-- features/ 模块测试覆盖率 > 80%
-- data/ 模块测试覆盖率 > 70%
-- trading/ 模块测试覆盖率 > 80%
-
-#### 3. 文档化
-- 更新 README.md
-- 添加 API 文档
-- 记录配置说明
-
----
-
-### 中期改进（1-3个月）
-
-#### 1. 性能优化
-- 缓存预处理结果
-- 并行化特征计算
-- 优化组合搜索
-
-#### 2. 可扩展性
-- 插件化模型架构
-- 策略模式重构回测
-- 事件驱动架构
-
-#### 3. 生产化准备
-- 添加日志系统
-- 错误监控
-- 健康检查接口
-
----
-
-## ⚠️ 重构注意事项
-
-### DO（推荐做法）
-
-✅ **增量重构**: 一次改一个模块，立即测试  
-✅ **保持向后兼容**: 旧代码逐步迁移  
-✅ **先测试后重构**: 有测试保护再动手  
-✅ **频繁提交**: 小步快跑，随时可回滚  
-✅ **文档同步**: 代码改了文档也要更新  
-
-### DON'T（避免）
-
-❌ **一次性大重构**: 风险太高  
-❌ **没测试就重构**: 容易引入 bug  
-❌ **过度设计**: KISS 原则，够用就好  
-❌ **改太多功能**: 专注可维护性  
-❌ **忽略性能**: 重构后要做性能测试  
-
----
-
-## 📚 学习资源
-
-### 测试
-- [Pytest 官方文档](https://docs.pytest.org/)
-- [Python Testing with pytest (书籍)](https://pragprog.com/titles/bopytest/)
-
-### 重构
-- [Refactoring: Improving the Design of Existing Code (Martin Fowler)](https://refactoring.com/)
-- [Clean Code (Robert C. Martin)](https://www.amazon.com/Clean-Code-Handbook-Software-Craftsmanship/dp/0132350882)
-
-### 架构
-- [Streamlit Best Practices](https://docs.streamlit.io/library/advanced-features)
-- [Python Application Layouts](https://realpython.com/python-application-layouts/)
-
----
-
-## 🎯 成功指标
-
-### 3个月后的目标
-
-| 指标 | 当前 | 目标 | 进展 |
-|------|------|------|------|
-| **测试覆盖率** | 0% | 70% | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ |
-| **app.py 行数** | 1758 | <300 | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ |
-| **配置管理** | 硬编码 | YAML | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ |
-| **文档完整度** | 60% | 90% | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ |
-| **CI/CD** | 无 | 有 | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ |
-
----
-
-## 💡 FAQ
-
-### Q1: 重构会影响现有功能吗？
-A: 不会，重构是改进内部结构，外部行为保持不变。有测试保护就更安全。
-
-### Q2: 需要多少时间？
-A: 基础改进（测试+拆分）需要 4-6 周。完整改进需要 2-3 个月。
-
-### Q3: 可以边用边改吗？
-A: 可以！增量重构不影响正常使用。建议在 Git 分支上进行。
-
-### Q4: 有风险吗？
-A: 有测试覆盖的前提下，风险很低。建议从非关键模块开始。
-
-### Q5: 需要停机吗？
-A: 不需要。在开发分支重构，测试通过后再合并。
-
----
-
-## 📞 获取帮助
-
-如果在改进过程中遇到问题：
-
-1. **查阅文档**: 见 `docs/` 目录
-2. **回滚代码**: `git reset --hard HEAD`
-3. **寻求帮助**: 提交 Issue 或咨询团队
-
----
-
-## ✅ 本周行动清单
-
-**第1步**（2小时）:
 ```powershell
-# 安装测试工具
-pip install pytest pytest-cov
-
-# 创建测试目录
-mkdir tests
-mkdir tests/unit
+streamlit run app.py
 ```
 
-**第2步**（4小时）:
-```python
-# 写第一个测试
-# tests/unit/test_features/test_indicators.py
-import pytest
-from ml_trader.features.indicators import compute_RSI
+当前 Streamlit 入口是 `app.py`。它只负责页面路由，实际页面在 `app/pages/`：
 
-def test_rsi_basic():
-    prices = pd.Series([100, 102, 101, 103, 105])
-    rsi = compute_RSI(prices, period=3)
-    assert not rsi.empty
-    assert rsi.between(0, 100).all()
-```
+- `training_page.py`：训练模型
+- `prediction_page.py`：预测和策略回测
+- `finetune_page.py`：模型微调
+- `upload_page.py`：上传模型预测
 
-**第3步**（2小时）:
+## 3. 运行测试
+
 ```powershell
-# 运行测试
-pytest tests/
-
-# 查看覆盖率
-pytest --cov=ml_trader --cov-report=html
+python -m pytest -q
 ```
 
----
+常用测试命令：
 
-**开始时间**: 本周  
-**完成目标**: 3个月后项目评分达到 9/10  
-**关键成功因素**: 测试覆盖 + 模块化 + 配置管理
+```powershell
+python -m pytest tests/unit/test_features/
+python -m pytest tests/unit/test_trading/
+python -m pytest --cov=ml_trader --cov-report=html
+```
+
+`htmlcov/`、`.coverage`、`.pytest_cache/` 都是运行产物，可以随时删除。
+
+## 4. 数据约定
+
+默认数据文件：
+
+```text
+完整数据.csv
+```
+
+该文件不进入版本管理。默认流程会优先复用本地数据，再通过 Tushare 补齐。
+
+必要列：
+
+```text
+TradeDate, Open, High, Low, Close, Volume, Amount
+```
+
+其中 `Amount` 可缺失，核心流程至少需要日期和 OHLC。
+
+## 5. 开发入口
+
+核心模块：
+
+- `ml_trader/data/preprocessor.py`：特征工程和峰谷标签
+- `ml_trader/models/trainer.py`：模型训练
+- `ml_trader/models/predictor.py`：预测和信号生成
+- `ml_trader/trading/backtest.py`：交易构造和回测指标
+
+应用层：
+
+- `app/services/training_service.py`：多轮训练服务
+- `app/services/prediction_service.py`：组合筛选和预测服务
+- `app/utils/session_state.py`：Session state 初始化和访问
+- `app/ui_helpers.py`：页面共享辅助函数
+
+## 6. 当前验证状态
+
+最近一次验证：
+
+```text
+23 passed
+```
+
+覆盖率仍偏低，主要测试集中在技术指标和回测模块。后续补测优先级：
+
+1. `ml_trader/data/preprocessor.py`
+2. `ml_trader/models/predictor.py`
+3. `app/services/`
+4. 训练到预测的最小集成测试

@@ -1,5 +1,21 @@
 # 项目架构图和数据流程图
 
+## 当前架构摘要
+
+当前代码已完成应用层拆分：
+
+```text
+app.py                         # Streamlit 入口和 Tab 路由
+app/pages/                     # 页面层：训练、预测、微调、上传模型预测
+app/services/                  # 服务层：训练服务、预测服务
+app/components/                # UI 展示组件
+app/utils/                     # Session state 等工具
+app/ui_helpers.py              # 跨页面共享辅助函数
+ml_trader/                     # 核心算法包
+```
+
+下方历史架构图仍描述核心数据流和模块职责，其中应用层已由单一 `app.py` 拆分为 `app.py + app/pages + app/services`。
+
 ## 1. 项目架构图
 
 ```

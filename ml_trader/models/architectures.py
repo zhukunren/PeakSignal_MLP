@@ -149,57 +149,6 @@ def get_class_weights(y):
     weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
     return torch.tensor(weights, dtype=torch.float32)
 
-# 构造 Transformer 分类器
-'''
-def get_transformer_classifier(num_features, window_size, class_weights=None):
-    if class_weights is not None:
-        loss = WeightedCrossEntropyLoss(weight=class_weights)
-    else:
-        loss = nn.CrossEntropyLoss()
-    net = NeuralNetClassifier(
-        module=TransformerClassifier,
-        module__num_features=num_features,
-        module__window_size=window_size,
-        module__hidden_dim=512,
-        module__nhead=8,
-        module__num_encoder_layers=3,
-        module__dropout=0.1,
-        max_epochs=100,
-        lr=1e-4,
-        optimizer=torch.optim.Adam,
-        criterion=loss,
-        batch_size=128,
-        train_split=None,
-        verbose=0,
-        device='cuda' if torch.cuda.is_available() else 'cpu'
-    )
-    return ('transformer', net)
-
-# 构造 MLP 分类器
-def get_mlp_classifier(input_dim, class_weights=None):
-    if class_weights is not None:
-        if isinstance(class_weights, torch.Tensor):
-            class_weights = class_weights.float()
-        loss = nn.CrossEntropyLoss(weight=class_weights)
-    else:
-        loss = nn.CrossEntropyLoss()
-    net = NeuralNetClassifier(
-        module=MLPClassifierModule,
-        module__input_dim=input_dim,
-        module__hidden_dim=128,
-        module__output_dim=2,
-        module__dropout=0.5,
-        criterion=loss,
-        optimizer=torch.optim.Adam,
-        max_epochs=100,
-        lr=1e-3,
-        batch_size=128,
-        train_split=None,
-        verbose=0,
-        device='cuda' if torch.cuda.is_available() else 'cpu'
-    )
-    return ('mlp', net)
-'''
 def get_transformer_classifier(num_features, window_size, class_weights=None):
     if class_weights is not None:
         loss = WeightedCrossEntropyLoss(weight=class_weights)
