@@ -42,3 +42,7 @@ fixed_feature_combo_cache/
 
 # Streamlit local state
 .streamlit/secrets.toml
+
+# Experiments directory (entire folder excluded)
+experiments/
+!experiments/README.md

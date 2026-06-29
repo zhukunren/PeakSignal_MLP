@@ -60,7 +60,7 @@ def _predict_probability_array(data_preprocessed, model, scaler, selector, selec
             data[feature] = 0
 
     x_new = data[selected_features].fillna(0)
-    x_scaled = scaler.transform(x_new).astype(np.float32)
+    x_scaled = scaler.transform(x_new).astype(np.float32) if scaler is not None else x_new.to_numpy(np.float32)
     x_model = selector.transform(x_scaled) if selector is not None else x_scaled
 
     if hasattr(model, "predict_proba"):
@@ -215,14 +215,20 @@ def predict_event_regime_model_data(
         base_model["trough_selected_features"],
     )
 
+    event_buy_model = event_model_package.get("event_buy_model")
+    event_sell_model = event_model_package.get("event_sell_model")
     event_features = event_model_package.get("event_features") or all_features
     event_df, _ = _add_event_sequence_features(data_preprocessed, event_features)
-    for feature in event_features:
-        if feature not in event_df.columns:
-            event_df[feature] = 0
-    x_event = event_df[event_features].fillna(0).to_numpy(np.float32)
-    event_buy_score = event_model_package["event_buy_model"].predict(x_event).astype(np.float32)
-    event_sell_score = event_model_package["event_sell_model"].predict(x_event).astype(np.float32)
+    if event_buy_model is not None and event_sell_model is not None:
+        for feature in event_features:
+            if feature not in event_df.columns:
+                event_df[feature] = 0
+        x_event = event_df[event_features].fillna(0).to_numpy(np.float32)
+        event_buy_score = event_buy_model.predict(x_event).astype(np.float32)
+        event_sell_score = event_sell_model.predict(x_event).astype(np.float32)
+    else:
+        event_buy_score = np.zeros(len(data_preprocessed), dtype=np.float32)
+        event_sell_score = np.zeros(len(data_preprocessed), dtype=np.float32)
 
     data_preprocessed["Base_Peak_Probability"] = base_peak_probability
     data_preprocessed["Base_Trough_Probability"] = base_trough_probability
@@ -252,7 +258,8 @@ def predict_event_regime_model_data(
 
     base_buy = _suppress_repeated_signal_array(base_trough_probability > base_trough_threshold, base_signal_window)
     base_sell = _suppress_repeated_signal_array(base_peak_probability > base_peak_threshold, base_signal_window)
-    if "Close_MA200_Diff" in data_preprocessed.columns:
+    gate_rule = params.get("event_buy_regime_gate", "Close_MA200_Diff > 0")
+    if gate_rule == "Close_MA200_Diff > 0" and "Close_MA200_Diff" in data_preprocessed.columns:
         regime_gate = data_preprocessed["Close_MA200_Diff"].to_numpy(dtype=float) > 0
     else:
         regime_gate = np.ones(len(data_preprocessed), dtype=bool)
@@ -269,8 +276,24 @@ def predict_event_regime_model_data(
     data_preprocessed["Event_Peak_Signal"] = event_sell
     data_preprocessed["Trough_Probability"] = np.maximum(base_trough_probability, event_buy_score)
     data_preprocessed["Peak_Probability"] = np.maximum(base_peak_probability, event_sell_score)
-    data_preprocessed["Trough_Prediction"] = np.maximum(base_buy, event_buy).astype(int)
-    data_preprocessed["Peak_Prediction"] = np.maximum(base_sell, event_sell).astype(int)
+    strict_mode = params.get("strict_oos_mode")
+    if strict_mode == "base_only":
+        trough_prediction = base_buy
+        peak_prediction = base_sell
+    elif strict_mode == "event_only":
+        trough_prediction = event_buy
+        peak_prediction = event_sell
+    elif strict_mode == "event_buy_base_sell":
+        trough_prediction = event_buy
+        peak_prediction = base_sell
+    elif strict_mode == "base_buy_event_sell":
+        trough_prediction = base_buy
+        peak_prediction = event_sell
+    else:
+        trough_prediction = np.maximum(base_buy, event_buy)
+        peak_prediction = np.maximum(base_sell, event_sell)
+    data_preprocessed["Trough_Prediction"] = trough_prediction.astype(int)
+    data_preprocessed["Peak_Prediction"] = peak_prediction.astype(int)
 
     if enable_change_signal:
         data_preprocessed = change_trough_and_peak(data_preprocessed, N_newhigh)
