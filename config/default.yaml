@@ -32,6 +32,20 @@ training:
   # 默认分类器
   default_classifier: "MLP"  # MLP 或 Transformer
 
+  # 多训练窗口候选池。默认关闭，开启后会训练多个时间窗口的候选模型，
+  # 由组合筛选阶段决定当前市场更适合哪类模型。
+  enable_multi_window_pool: false
+  windows:
+    - name: "base_2000_2020"
+      start: "2000-01-01"
+      end: "2020-12-31"
+    - name: "mid_2010_latest"
+      start: "2010-01-01"
+      end: "latest_confirmed"
+    - name: "recent_2016_latest"
+      start: "2016-01-01"
+      end: "latest_confirmed"
+
 # 预测配置
 prediction:
   # 预测数据范围
@@ -43,6 +57,8 @@ prediction:
 
   # 组合搜索时的策略参数（简化版，用于快速筛选）
   combo_search:
+    selection_metric: "quality"  # quality 或 excess_return
+    signal_tolerance_days: 5
     enable_chase: false
     enable_stop_loss: false
     enable_change_signal: false
@@ -59,6 +75,27 @@ features:
   # 特征筛选参数
   correlation_threshold: 0.95  # 相关性过滤阈值
   variance_threshold: 0.0001   # 方差过滤阈值
+
+  # 标签专属特征筛选。mode 可选：
+  # legacy：保持旧逻辑；hybrid：优先保留标签特征组，再补充全局排序特征；
+  # preferred_only：只从标签特征组中筛选。
+  selection:
+    default_mode: "hybrid"
+    method: "pearson"
+    peak:
+      mode: "hybrid"
+      max_features: 50
+      min_preferred_features: 15
+      preferred_groups:
+        - "peak"
+        - "common"
+    trough:
+      mode: "hybrid"
+      max_features: 50
+      min_preferred_features: 15
+      preferred_groups:
+        - "trough"
+        - "common"
 
   # PCA 降维
   pca:
@@ -130,6 +167,7 @@ logging:
   file: "logs/app.log"
   max_bytes: 10485760  # 10MB
   backup_count: 5
+  console: true
 
 # UI配置
 ui:

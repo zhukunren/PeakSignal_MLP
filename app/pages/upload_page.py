@@ -1,4 +1,8 @@
 from app.ui_helpers import *
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def render(data_source, symbol_code, N, mixture_depth):
@@ -32,7 +36,7 @@ def render(data_source, symbol_code, N, mixture_depth):
                 st.markdown('<div class="strategy-label">追涨长度</div>', unsafe_allow_html=True)
             with strategy_row1[2]:
                 n_buy_up = st.number_input(
-                    "",
+                    "追涨长度",
                     min_value=1,
                     max_value=60,
                     value=10,
@@ -48,7 +52,7 @@ def render(data_source, symbol_code, N, mixture_depth):
                 st.markdown('<div class="strategy-label">止损长度</div>', unsafe_allow_html=True)
             with strategy_row2[2]:
                 n_sell_up = st.number_input(
-                    "",
+                    "止损长度",
                     min_value=1,
                     max_value=60,
                     value=10,
@@ -64,7 +68,7 @@ def render(data_source, symbol_code, N, mixture_depth):
                 st.markdown('<div class="strategy-label">高点需创X日新高</div>', unsafe_allow_html=True)
             with strategy_row3[2]:
                 n_newhigh_up = st.number_input(
-                    "",
+                    "高点需创多少日新高",
                     min_value=1,
                     max_value=120,
                     value=60,
@@ -139,6 +143,7 @@ def render(data_source, symbol_code, N, mixture_depth):
                 }
                 st.success("预测完成！（使用已上传模型，未叠加策略）")
             except Exception as e:
+                logger.exception("Uploaded model prediction failed")
                 st.error(f"预测失败: {str(e)}")
 
         upload_cache_key = {
@@ -171,6 +176,7 @@ def render(data_source, symbol_code, N, mixture_depth):
                     chart_key="chart_upload_tab_strategy",
                 )
             except Exception as e:
+                logger.exception("Uploaded model strategy refresh failed")
                 st.error(f"上传模型策略回测刷新失败: {str(e)}")
         elif st.session_state.get('upload_base_prediction_result') is not None:
             st.info("上传模型预测参数已变化，请点击“开始预测(上传模型Tab)”生成新的模型预测缓存。")

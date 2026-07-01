@@ -1,5 +1,9 @@
 from app.ui_helpers import *
 from app.services.prediction_service import PredictionService
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def render(data_source, symbol_code, use_best_combo):
@@ -13,6 +17,15 @@ def render(data_source, symbol_code, use_best_combo):
         with col_date2:
             pred_end = st.date_input("预测结束日期", TARGET_PRED_END, key="pred_end_tab2")
 
+        compare_candidate_pools = False
+        if use_best_combo:
+            compare_candidate_pools = st.checkbox(
+                "比较旧/近年/混合候选池",
+                value=False,
+                help="开启后会额外搜索基础窗口、近年窗口和全量混合候选池，耗时更长。",
+                key="compare_candidate_pools_tab2",
+            )
+
         with st.expander("策略选择", expanded=False):
             load_custom_css()
             strategy_row1 = st.columns([2, 2, 5])
@@ -22,7 +35,7 @@ def render(data_source, symbol_code, use_best_combo):
                 st.markdown('<div class="strategy-label">追涨长度</div>', unsafe_allow_html=True)
             with strategy_row1[2]:
                 n_buy = st.number_input(
-                    "",
+                    "追涨长度",
                     min_value=1,
                     max_value=60,
                     value=10,
@@ -38,7 +51,7 @@ def render(data_source, symbol_code, use_best_combo):
                 st.markdown('<div class="strategy-label">止损长度</div>', unsafe_allow_html=True)
             with strategy_row2[2]:
                 n_sell = st.number_input(
-                    "",
+                    "止损长度",
                     min_value=1,
                     max_value=60,
                     value=10,
@@ -54,7 +67,7 @@ def render(data_source, symbol_code, use_best_combo):
                 st.markdown('<div class="strategy-label">高点需创X日新高</div>', unsafe_allow_html=True)
             with strategy_row3[2]:
                 n_newhigh = st.number_input(
-                    "",
+                    "高点需创多少日新高",
                     min_value=0,
                     max_value=120,
                     value=60,
@@ -100,18 +113,33 @@ def render(data_source, symbol_code, use_best_combo):
                 peak_models = st.session_state.peak_models_list
                 trough_models = st.session_state.trough_models_list
 
+                def candidate_window(candidate):
+                    return candidate.get("train_window") if isinstance(candidate, dict) else None
+
+                def comparison_row(pool_name, models, excess, bt_result):
+                    return {
+                        "候选池": pool_name,
+                        "组合评分": bt_result.get("组合评分"),
+                        "超额收益率": excess,
+                        "信号质量评分": bt_result.get("信号质量评分"),
+                        "低点附近命中率": bt_result.get("低点附近命中率"),
+                        "高点附近命中率": bt_result.get("高点附近命中率"),
+                        "中段误报率": bt_result.get("中段误报率"),
+                        "Peak窗口": bt_result.get("Peak模型训练窗口") or models.get("peak_train_window"),
+                        "Trough窗口": bt_result.get("Trough模型训练窗口") or models.get("trough_train_window"),
+                    }
+
                 best_excess = -np.inf
                 best_models = None
                 base_result, base_bt = None, {}
+                pool_comparison_rows = []
 
                 # 多组合搜索
                 if use_best_combo:
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                    progress_reporter = StreamlitProgressReporter()
 
                     def progress_callback(current, total, message):
-                        status_text.text(message)
-                        progress_bar.progress(current / total)
+                        progress_reporter.update(current, total, message)
 
                     prediction_service = PredictionService()
                     best_models, best_excess, base_result, base_bt = prediction_service.search_best_combination(
@@ -124,10 +152,61 @@ def render(data_source, symbol_code, use_best_combo):
                         pred_end.strftime("%Y%m%d"),
                         progress_callback=progress_callback,
                     )
-                    progress_bar.empty()
-                    status_text.empty()
+                    progress_reporter.clear()
                     
-                    st.success(f"预测完成！(多组合，未叠加策略筛选) 最佳超额收益率: {best_excess * 100:.2f}%")
+                    selection_score = base_bt.get("组合评分")
+                    if selection_score is not None:
+                        st.success(
+                            f"预测完成！(多组合，未叠加策略筛选) "
+                            f"组合评分: {selection_score:.4f}，超额收益率: {best_excess * 100:.2f}%"
+                        )
+                    else:
+                        st.success(f"预测完成！(多组合，未叠加策略筛选) 超额收益率: {best_excess * 100:.2f}%")
+
+                    pool_comparison_rows.append(
+                        comparison_row("混合候选池", best_models, best_excess, base_bt)
+                    )
+                    if compare_candidate_pools:
+                        comparison_groups = [
+                            (
+                                "旧模型池",
+                                [m for m in peak_models if candidate_window(m) == "base_2000_2020"],
+                                [m for m in trough_models if candidate_window(m) == "base_2000_2020"],
+                            ),
+                            (
+                                "近年模型池",
+                                [
+                                    m for m in peak_models
+                                    if candidate_window(m) and candidate_window(m) != "base_2000_2020"
+                                ],
+                                [
+                                    m for m in trough_models
+                                    if candidate_window(m) and candidate_window(m) != "base_2000_2020"
+                                ],
+                            ),
+                        ]
+                        for pool_name, pool_peak_models, pool_trough_models in comparison_groups:
+                            if not pool_peak_models or not pool_trough_models:
+                                pool_comparison_rows.append({
+                                    "候选池": pool_name,
+                                    "状态": "候选不足",
+                                    "Peak候选数": len(pool_peak_models),
+                                    "Trough候选数": len(pool_trough_models),
+                                })
+                                continue
+                            with st.spinner(f"候选池对照：{pool_name}"):
+                                cmp_models, cmp_excess, _, cmp_bt = prediction_service.search_best_combination(
+                                    pool_peak_models,
+                                    pool_trough_models,
+                                    new_df_raw,
+                                    st.session_state.models['N'],
+                                    st.session_state.models['mixture_depth'],
+                                    pred_start.strftime("%Y%m%d"),
+                                    pred_end.strftime("%Y%m%d"),
+                                )
+                                pool_comparison_rows.append(
+                                    comparison_row(pool_name, cmp_models, cmp_excess, cmp_bt)
+                                )
                 
                 else:
                     # 单模型预测
@@ -182,6 +261,11 @@ def render(data_source, symbol_code, use_best_combo):
                 st.session_state.models.update(cached_models)
                 st.session_state.base_prediction_result = base_result.copy()
                 st.session_state.base_selection_bt = base_bt
+                st.session_state.candidate_pool_comparison = (
+                    pd.DataFrame(pool_comparison_rows)
+                    if compare_candidate_pools and pool_comparison_rows
+                    else None
+                )
                 st.session_state.prediction_cache_key = {
                     'data_source': data_source,
                     'symbol_code': symbol_code,
@@ -198,6 +282,7 @@ def render(data_source, symbol_code, use_best_combo):
                 st.session_state.enable_change_signal_val = enable_change_signal_val
 
             except Exception as e:
+                logger.exception("Prediction page failed")
                 st.error(f"预测失败: {str(e)}")
 
         current_cache_key = {
@@ -220,6 +305,26 @@ def render(data_source, symbol_code, use_best_combo):
                     enable_stop_loss,
                     enable_change_signal,
                 )
+                for metric_key in [
+                    "组合筛选指标",
+                    "组合评分",
+                    "信号质量评分",
+                    "低点附近命中率",
+                    "高点附近命中率",
+                    "中段误报率",
+                    "Peak模型训练窗口",
+                    "Peak模型训练起始",
+                    "Peak模型训练结束",
+                    "Peak模型seed",
+                    "Peak模型轮次",
+                    "Trough模型训练窗口",
+                    "Trough模型训练起始",
+                    "Trough模型训练结束",
+                    "Trough模型seed",
+                    "Trough模型轮次",
+                ]:
+                    if metric_key in st.session_state.get("base_selection_bt", {}):
+                        final_bt[metric_key] = st.session_state.base_selection_bt[metric_key]
                 st.session_state.final_result = final_result
                 st.session_state.final_bt = final_bt
                 st.session_state.final_trades_df = final_trades_df
@@ -238,8 +343,13 @@ def render(data_source, symbol_code, use_best_combo):
                     pred_end,
                     chart_key="chart3_strategy",
                 )
+                candidate_pool_comparison = st.session_state.get("candidate_pool_comparison")
+                if isinstance(candidate_pool_comparison, pd.DataFrame) and not candidate_pool_comparison.empty:
+                    st.subheader("候选池对照")
+                    st.dataframe(candidate_pool_comparison, use_container_width=True, hide_index=True)
                 render_prediction_model_download(symbol_code)
             except Exception as e:
+                logger.exception("Strategy refresh failed on prediction page")
                 st.error(f"策略回测刷新失败: {str(e)}")
         elif st.session_state.get('base_prediction_result') is not None:
             st.info("预测参数已变化，请点击“开始预测”生成新的模型预测缓存。")

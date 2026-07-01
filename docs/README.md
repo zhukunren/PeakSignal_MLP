@@ -6,6 +6,7 @@
 
 - [快速使用指南](quick_start_guide.md)：环境、运行、测试和常用命令。
 - [架构说明](architecture.md)：应用层、核心包和数据流程。
+- [模型组合筛选落地方案](model_selection_landing_solutions.md)：Peak/Trough 特征拆分、信号质量评分和近年行情学习方案。
 - [重构进度](refactoring_progress_report.md)：当前重构状态、已完成事项和剩余风险。
 - [测试实施状态](testing_implementation_report.md)：当前测试结果、覆盖率和下一步补测目标。
 

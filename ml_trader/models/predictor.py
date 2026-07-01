@@ -8,6 +8,10 @@ from ml_trader.models.architectures import  TransformerClassifier
 import pandas as pd
 import pickle
 from pathlib import Path
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 #绘图函数
 
@@ -45,7 +49,7 @@ def merge_trades(data_preprocessed, trades_df):
 
     # 删除重复日期
     data_preprocessed = data_preprocessed.drop_duplicates(subset=['date'])
-    print(data_preprocessed['trade'])
+    logger.debug("Merged trades:\n%s", data_preprocessed['trade'])
     
     # 恢复原始索引
     data_preprocessed.index = original_index
@@ -361,7 +365,15 @@ def predict_new_data(
     使用训练好的模型(峰/谷)对 new_df 做预测，并可选做回测。
     注意：peak_selected_features/trough_selected_features 是模型真正见过的特征列表。
     """
-    print("开始预测新数据...")
+    logger.info(
+        "Predicting new data: rows=%s N=%s mixture_depth=%s eval_mode=%s backtest_start=%s backtest_end=%s",
+        len(new_df),
+        N,
+        mixture_depth,
+        eval_mode,
+        backtest_start_date,
+        backtest_end_date,
+    )
     try:
         # 首先做预处理
         data_preprocessed, _ = preprocess_data(
@@ -371,12 +383,12 @@ def predict_new_data(
             mark_labels=eval_mode
         )
         # ========== 预测 Peak ==========
-        print("\n开始 Peak 预测...")
+        logger.info("Predicting Peak probabilities")
 
         # 补全新数据中缺失的特征
         missing_peak = [f for f in peak_selected_features if f not in data_preprocessed.columns]
         if missing_peak:
-            print(f"填充缺失特征(Peak): {missing_peak}")
+            logger.warning("Filling missing Peak features: %s", missing_peak)
             for feature in missing_peak:
                 data_preprocessed[feature] = 0
         
@@ -385,20 +397,20 @@ def predict_new_data(
         
         # 调用训练时的 scaler
         X_new_peak_scaled = peak_scaler.transform(X_new_peak).astype(np.float32)
-        print(f"Peak数据形状: {X_new_peak_scaled.shape}")
+        logger.info("Peak feature matrix shape: %s", X_new_peak_scaled.shape)
 
         # 如果是 Transformer 模型，需要构造序列数据
         from skorch import NeuralNetClassifier
         
         if (isinstance(peak_model, NeuralNetClassifier) and
             isinstance(peak_model.module_, TransformerClassifier)):
-            print("创建 Peak 序列数据...")
+            logger.info("Building Peak sequence data")
             X_seq_list = []
             for i in range(window_size, len(X_new_peak_scaled) + 1):
                 seq_x = X_new_peak_scaled[i - window_size:i]
                 X_seq_list.append(seq_x)
             X_new_seq_peak = np.array(X_seq_list, dtype=np.float32)
-            print(f"Peak序列数据形状: {X_new_seq_peak.shape}")
+            logger.info("Peak sequence matrix shape: %s", X_new_seq_peak.shape)
 
             batch_size = 64
             predictions = []
@@ -438,27 +450,27 @@ def predict_new_data(
         data_preprocessed['Peak_Prediction'] = peak_preds
 
         # ========== 预测 Trough ==========
-        print("\n开始 Trough 预测...")
+        logger.info("Predicting Trough probabilities")
 
         missing_trough = [f for f in trough_selected_features if f not in data_preprocessed.columns]
         if missing_trough:
-            print(f"填充缺失特征(Trough): {missing_trough}")
+            logger.warning("Filling missing Trough features: %s", missing_trough)
             for feature in missing_trough:
                 data_preprocessed[feature] = 0
 
         X_new_trough = data_preprocessed[trough_selected_features].fillna(0)
         X_new_trough_scaled = trough_scaler.transform(X_new_trough).astype(np.float32)
-        print(f"Trough数据形状: {X_new_trough_scaled.shape}")
+        logger.info("Trough feature matrix shape: %s", X_new_trough_scaled.shape)
 
         if (isinstance(trough_model, NeuralNetClassifier) and
             isinstance(trough_model.module_, TransformerClassifier)):
-            print("创建 Trough 序列数据...")
+            logger.info("Building Trough sequence data")
             X_seq_list = []
             for i in range(window_size, len(X_new_trough_scaled) + 1):
                 seq_x = X_new_trough_scaled[i - window_size:i]
                 X_seq_list.append(seq_x)
             X_new_seq_trough = np.array(X_seq_list, dtype=np.float32)
-            print(f"Trough序列数据形状: {X_new_seq_trough.shape}")
+            logger.info("Trough sequence matrix shape: %s", X_new_seq_trough.shape)
 
             batch_size = 64
             predictions = []
@@ -506,7 +518,7 @@ def predict_new_data(
             data_preprocessed = data_preprocessed.loc[mask].copy()
 
         # ====== 后处理：20日内不重复预测 (根据原逻辑) ======
-        print("\n进行后处理...")
+        logger.info("Applying prediction post-processing")
         data_preprocessed.index = data_preprocessed.index.astype(str)
         for idx, index in enumerate(data_preprocessed.index):
             if data_preprocessed.loc[index, 'Peak_Prediction'] == 1:
@@ -536,7 +548,7 @@ def predict_new_data(
 
         # 若交易记录为空，则直接返回默认回测结果，并跳过后续交易日期的合并
         if trades_df.empty:
-            print("交易记录为空，回测结果将返回默认值")
+            logger.info("No trades generated; returning default backtest result")
             data_preprocessed['trade'] = None
         else:
             # 用 'TradeDate' 或索引做时间列
@@ -579,11 +591,11 @@ def predict_new_data(
             data_preprocessed.set_index('date', inplace=True)
 
     except Exception as e:
-        print('predict_new_data函数出错:', e)
+        logger.exception("predict_new_data failed: %s", e)
         if 'trades_df' in locals():
-            print("回测结果：", trades_df)
+            logger.debug("Backtest trades before failure:\n%s", trades_df)
         else:
-            print("未生成交易结果")
+            logger.debug("No trades were generated before failure")
         raise e
 
     return data_preprocessed, bt_result, trades_df
@@ -630,6 +642,14 @@ def predict_new_data_with_ensemble(
     from skorch import NeuralNetClassifier
     # 预处理数据
     try:
+        logger.info(
+            "Predicting with ensemble: rows=%s N=%s mixture_depth=%s eval_mode=%s ensemble_weight=%s",
+            len(new_df),
+            N,
+            mixture_depth,
+            eval_mode,
+            ensemble_weight,
+        )
         data_preprocessed, _ = preprocess_data(
             new_df, 
             N, 
@@ -641,24 +661,24 @@ def predict_new_data_with_ensemble(
         # 补全缺失的峰特征
         missing_peak = [f for f in peak_selected_features if f not in data_preprocessed.columns]
         if missing_peak:
-            print(f"填充缺失特征(Peak): {missing_peak}")
+            logger.warning("Filling missing Peak features for ensemble: %s", missing_peak)
             for feature in missing_peak:
                 data_preprocessed[feature] = 0
-        
+
         X_new_peak = data_preprocessed[peak_selected_features].fillna(0)
         X_new_peak_scaled = peak_scaler.transform(X_new_peak).astype(np.float32)
-        print(f"Peak数据形状: {X_new_peak_scaled.shape}")
+        logger.info("Ensemble Peak feature matrix shape: %s", X_new_peak_scaled.shape)
         
         # 判断是否为 Transformer 模型
         if (isinstance(original_peak_model, NeuralNetClassifier) and
             isinstance(original_peak_model.module_, TransformerClassifier)):
-            print("创建 Peak 序列数据...")
+            logger.info("Building ensemble Peak sequence data")
             X_seq_list = []
             for i in range(window_size, len(X_new_peak_scaled) + 1):
                 seq_x = X_new_peak_scaled[i - window_size:i]
                 X_seq_list.append(seq_x)
             X_new_seq_peak = np.array(X_seq_list, dtype=np.float32)
-            print(f"Peak序列数据形状: {X_new_seq_peak.shape}")
+            logger.info("Ensemble Peak sequence matrix shape: %s", X_new_seq_peak.shape)
             
             batch_size = 64
             predictions_list = []
@@ -701,23 +721,23 @@ def predict_new_data_with_ensemble(
         # ---------------- Trough 预测 ----------------
         missing_trough = [f for f in trough_selected_features if f not in data_preprocessed.columns]
         if missing_trough:
-            print(f"填充缺失特征(Trough): {missing_trough}")
+            logger.warning("Filling missing Trough features for ensemble: %s", missing_trough)
             for feature in missing_trough:
                 data_preprocessed[feature] = 0
-        
+
         X_new_trough = data_preprocessed[trough_selected_features].fillna(0)
         X_new_trough_scaled = trough_scaler.transform(X_new_trough).astype(np.float32)
-        print(f"Trough数据形状: {X_new_trough_scaled.shape}")
+        logger.info("Ensemble Trough feature matrix shape: %s", X_new_trough_scaled.shape)
         
         if (isinstance(original_trough_model, NeuralNetClassifier) and
             isinstance(original_trough_model.module_, TransformerClassifier)):
-            print("创建 Trough 序列数据...")
+            logger.info("Building ensemble Trough sequence data")
             X_seq_list = []
             for i in range(window_size, len(X_new_trough_scaled) + 1):
                 seq_x = X_new_trough_scaled[i - window_size:i]
                 X_seq_list.append(seq_x)
             X_new_seq_trough = np.array(X_seq_list, dtype=np.float32)
-            print(f"Trough序列数据形状: {X_new_seq_trough.shape}")
+            logger.info("Ensemble Trough sequence matrix shape: %s", X_new_seq_trough.shape)
             
             batch_size = 64
             predictions_list = []
@@ -751,9 +771,9 @@ def predict_new_data_with_ensemble(
         
         data_preprocessed['Trough_Probability'] = trough_probas
         data_preprocessed['Trough_Prediction'] = (trough_probas > trough_threshold).astype(int)
-        
+
         # ---------------- 后处理：避免短期内重复信号 ----------------
-        print("进行后处理...")
+        logger.info("Applying ensemble prediction post-processing")
         data_preprocessed.index = data_preprocessed.index.astype(str)
         for idx, index in enumerate(data_preprocessed.index):
             if data_preprocessed.loc[index, 'Peak_Prediction'] == 1:
@@ -808,11 +828,11 @@ def predict_new_data_with_ensemble(
         data_preprocessed.set_index('date', inplace=True)
         
     except Exception as e:
-        print("predict_new_data_with_ensemble函数出错:", e)
+        logger.exception("predict_new_data_with_ensemble failed: %s", e)
         if 'trades_df' in locals():
-            print("回测结果：", trades_df)
+            logger.debug("Backtest trades before ensemble failure:\n%s", trades_df)
         else:
-            print("未生成交易结果")
+            logger.debug("No trades were generated before ensemble failure")
         raise e
     
     return data_preprocessed, bt_result, trades_df

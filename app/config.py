@@ -15,6 +15,8 @@ class AppConfig:
     NUM_ROUNDS = config.get("training.num_rounds", 10)
     DEFAULT_TRAIN_START = config.get("training.default_train_start", "2000-01-01")
     DEFAULT_TRAIN_END = config.get("training.default_train_end", "2020-12-31")
+    ENABLE_MULTI_WINDOW_POOL = config.get("training.enable_multi_window_pool", False)
+    TRAINING_WINDOWS = config.get("training.windows", [])
 
     # 预测配置
     DEFAULT_PRED_START = config.get("prediction.default_pred_start", "2021-01-01")
@@ -49,6 +51,8 @@ class AppConfig:
             "num_rounds": cls.NUM_ROUNDS,
             "default_train_start": cls.DEFAULT_TRAIN_START,
             "default_train_end": cls.DEFAULT_TRAIN_END,
+            "enable_multi_window_pool": cls.ENABLE_MULTI_WINDOW_POOL,
+            "windows": cls.TRAINING_WINDOWS,
         }
 
     @classmethod

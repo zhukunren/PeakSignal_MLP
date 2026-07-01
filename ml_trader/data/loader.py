@@ -4,6 +4,11 @@ import numpy as np
 import os
 from datetime import datetime
 
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
+
 
 def get_tushare_pro():
     token = os.getenv("TUSHARE_TOKEN")
@@ -23,8 +28,13 @@ def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101
     """
     symbol_type = symbol_type.lower()
     end_date = datetime.now().strftime("%Y%m%d") if end_date is None else str(end_date)
-    print(f"传递给 read_day_from_tushare 的 symbol_type: {symbol_type} (类型: {type(symbol_type)})")  # 调试输出
-    print(f"尝试通过 Tushare 获取{symbol_type}数据: {symbol_code}")
+    logger.info(
+        "Fetching Tushare data: symbol=%s type=%s start=%s end=%s",
+        symbol_code,
+        symbol_type,
+        start_date,
+        end_date,
+    )
     
     # 添加断言，确保 symbol_type 是 'stock' 或 'index'
     assert symbol_type in ['stock', 'index'], "symbol_type 必须是 'stock' 或 'index'"
@@ -35,7 +45,7 @@ def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101
             # 获取股票日线数据
             df = pro.daily(ts_code=symbol_code, start_date=start_date, end_date=end_date)
             if df.empty:
-                print("Tushare 返回的股票数据为空。")
+                logger.warning("Tushare returned empty stock data: symbol=%s", symbol_code)
                 return pd.DataFrame()
             
             # 转换日期格式并排序
@@ -63,7 +73,7 @@ def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101
             # 获取指数日线数据，使用 index_daily 接口
             df = pro.index_daily(ts_code=symbol_code, start_date=start_date, end_date=end_date)
             if df.empty:
-                print("Tushare 返回的指数数据为空。")
+                logger.warning("Tushare returned empty index data: symbol=%s", symbol_code)
                 return pd.DataFrame()
             
             # 转换日期格式并排序
@@ -86,15 +96,19 @@ def read_day_from_tushare(symbol_code, symbol_type='index', start_date='19920101
             required_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'Amount', 'TradeDate']
             available_columns = [col for col in required_columns if col in df.columns]
             df = df[available_columns]
-        print(f"通过 Tushare 获取了 {len(df)} 条记录。")
-        print(f"数据框的列：{df.columns.tolist()}")
-        print(f"数据框前5行：\n{df.head()}")
+        logger.info(
+            "Fetched Tushare data: symbol=%s rows=%s columns=%s",
+            symbol_code,
+            len(df),
+            df.columns.tolist(),
+        )
+        logger.debug("Tushare head:\n%s", df.head())
         return df
     except AssertionError as ae:
-        print(f"断言错误：{ae}")
+        logger.exception("Invalid Tushare request: %s", ae)
         return pd.DataFrame()
     except Exception as e:
-        print(f"通过 Tushare 获取数据失败：{e}")
+        logger.exception("Failed to fetch Tushare data: %s", e)
         return pd.DataFrame()
     
 
@@ -116,8 +130,13 @@ def select_time(df, start_time='20230101', end_time='20240910'):
     mask = (df['TradeDate'] >= start_time) & (df['TradeDate'] <= end_time)
     df_filtered = df.loc[mask].copy()
 
-    print(f"筛选后日期范围: {df_filtered['TradeDate'].min()} 到 {df_filtered['TradeDate'].max()}")
-    print(df_filtered.head())
+    logger.info(
+        "Selected time range: start=%s end=%s rows=%s",
+        df_filtered['TradeDate'].min(),
+        df_filtered['TradeDate'].max(),
+        len(df_filtered),
+    )
+    logger.debug("Selected data head:\n%s", df_filtered.head())
     return df_filtered
 
 

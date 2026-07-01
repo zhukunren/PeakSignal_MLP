@@ -1,4 +1,8 @@
 from app.ui_helpers import *
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversample_method):
@@ -89,10 +93,9 @@ def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversamp
 
                 # ---- 3.1 对峰模型进行 10 次微调 ----
                 st.write("正在对峰模型进行 10 轮微调训练...")
-                peak_progress_bar = st.progress(0)
+                peak_progress = StreamlitProgressReporter()
                 for i in range(10):
-                    round_text = st.empty()
-                    round_text.text(f"峰模型 - 第 {i+1}/10 轮微调...")
+                    peak_progress.update(i, 10, f"峰模型 - 第 {i+1}/10 轮微调...", force=True)
                     # 每次都从“原模型”克隆一份，避免上一轮修改带来的影响
                     cloned_peak_model = copy.deepcopy(st.session_state.models['peak_model'])
 
@@ -119,16 +122,16 @@ def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversamp
                     st.session_state.peak_models_finetuned_list.append(
                         (updated_peak_model, peak_val_acc, peak_epochs)
                     )
-                    peak_progress_bar.progress((i+1)/10)
+                    peak_progress.update(i + 1, 10, f"峰模型 - 第 {i+1}/10 轮完成", force=True)
+                peak_progress.finish("峰模型 10 轮微调全部完成！")
                 
                 st.success("峰模型 10 轮微调全部完成！")
 
                 # ---- 3.2 对谷模型进行 10 次微调 ----
                 st.write("正在对谷模型进行 10 轮微调训练...")
-                trough_progress_bar = st.progress(0)
+                trough_progress = StreamlitProgressReporter()
                 for i in range(10):
-                    round_text = st.empty()
-                    round_text.text(f"谷模型 - 第 {i+1}/10 轮微调...")
+                    trough_progress.update(i, 10, f"谷模型 - 第 {i+1}/10 轮微调...", force=True)
                     # 同理，克隆一份
                     cloned_trough_model = copy.deepcopy(st.session_state.models['trough_model'])
 
@@ -155,7 +158,8 @@ def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversamp
                     st.session_state.trough_models_finetuned_list.append(
                         (updated_trough_model, trough_val_acc, trough_epochs)
                     )
-                    trough_progress_bar.progress((i+1)/10)
+                    trough_progress.update(i + 1, 10, f"谷模型 - 第 {i+1}/10 轮完成", force=True)
+                trough_progress.finish("谷模型 10 轮微调全部完成！")
 
                 st.success("谷模型 10 轮微调全部完成！")
                 
@@ -181,16 +185,13 @@ def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversamp
                 if eval_df is None or eval_df.empty:
                     eval_df = add_df  # 如果 new_df_raw 没数据，就用 add_df
                 total_combos = 100
-                combo_progress_bar = st.progress(0)
-                combo_text = st.empty()
+                combo_progress = StreamlitProgressReporter()
 
                 for idx, (peak_tuple, trough_tuple) in enumerate(product(
                     st.session_state.peak_models_finetuned_list,
                     st.session_state.trough_models_finetuned_list
                 )):
-                    i_progress = (idx+1)/total_combos
-                    combo_text.text(f"第 {idx+1}/{total_combos} 组合...")
-                    combo_progress_bar.progress(i_progress)
+                    combo_progress.update(idx + 1, total_combos, f"第 {idx+1}/{total_combos} 组合...")
 
                     (fined_peak_model, peak_val_acc, peak_epochs) = peak_tuple
                     (fined_trough_model, trough_val_acc, trough_epochs) = trough_tuple
@@ -227,10 +228,10 @@ def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversamp
                             best_combo_finetune = (peak_tuple, trough_tuple)
                     except Exception as e:
                         # 某些组合可能因为数据极端/过采样导致报错，忽略
+                        logger.debug("Finetune combo failed", exc_info=True)
                         pass
 
-                combo_progress_bar.empty()
-                combo_text.empty()
+                combo_progress.clear()
 
                 if best_combo_finetune is None:
                     st.error("在 100 组合中，全部回测都失败，请检查数据或微调参数。")
@@ -391,6 +392,7 @@ def render(data_source, symbol_code, classifier_name, N, mixture_depth, oversamp
                 evaluate_finetune_effect(freeze_option)
 
             except Exception as e:
+                logger.exception("Model finetune failed")
                 st.error(f"模型微调过程出现错误: {str(e)}")
                 st.exception(e)
 

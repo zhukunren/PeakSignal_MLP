@@ -3,6 +3,10 @@ import numpy as np
 from ml_trader.features.indicators import *
 import pandas as pd
 import plotly.graph_objects as go
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def build_trades_from_signals(df, signal_df, N_buy, N_sell, enable_chase=False, enable_stop_loss=False):
@@ -61,7 +65,7 @@ def build_trades_from_signals(df, signal_df, N_buy, N_sell, enable_chase=False, 
                         else:
                             entry_price = exit_price
                     except Exception as e:
-                        print('处理追涨信号出错：', e)
+                        logger.exception("Failed to process chase signal: %s", e)
                     # 进入交易后跳过后续逻辑
                     continue
             
@@ -74,7 +78,7 @@ def build_trades_from_signals(df, signal_df, N_buy, N_sell, enable_chase=False, 
                     holding_days = 0
                     signal_type_buy = '信号'
                 except Exception as e:
-                    print("处理buy信号报错：", e)
+                    logger.exception("Failed to process buy signal: %s", e)
         else:
             # 持仓中
             holding_days += 1
@@ -153,7 +157,7 @@ def build_trades_from_signals(df, signal_df, N_buy, N_sell, enable_chase=False, 
                         entry_price = None
                         holding_days = 0
             except Exception as e:
-                print("处理持仓逻辑错误：", e)
+                logger.exception("Failed to process holding logic: %s", e)
 
     # 回测最后一天，如果还在持仓，则在最后一天收盘价平仓
     if holding:
@@ -174,7 +178,7 @@ def build_trades_from_signals(df, signal_df, N_buy, N_sell, enable_chase=False, 
                 'signal_loc': df.index.get_loc(today),
             })
         except Exception as e:
-            print("处理最后持仓错误：", e)
+            logger.exception("Failed to close final holding: %s", e)
 
     trades_df = pd.DataFrame(trades)
     return trades_df

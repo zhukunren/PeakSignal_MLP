@@ -1,6 +1,10 @@
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import pandas as pd
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def _prediction_signal_text(row):
@@ -61,7 +65,7 @@ def plot_candlestick(data, stock_code, start_date, end_date,
 
     # 过滤数据只保留在 start_date 到 end_date 之间的数据
     data = data[(data.index >= start_date) & (data.index <= end_date)]
-    print(data.head(5))
+    logger.debug("Candlestick data head:\n%s", data.head(5))
     data = data.copy()
     if 'Peak_Probability' in data.columns:
         data['Peak_Probability'] = pd.to_numeric(data['Peak_Probability'], errors='coerce')

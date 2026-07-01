@@ -1,5 +1,10 @@
 from app.ui_helpers import *
+from app.config import AppConfig
 from app.services.training_service import TrainingService
+from ml_trader.logging_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def render(data_source, symbol_code, N, classifier_name, mixture_depth, oversample_method, auto_feature, n_features_selected):
@@ -11,6 +16,11 @@ def render(data_source, symbol_code, N, classifier_name, mixture_depth, oversamp
         train_end = st.date_input("训练结束日期", datetime(2020, 12, 31), key="train_end_tab1")
 
     num_rounds = 10  # 固定多轮训练次数，默认包含 seed=7308 的第8轮目标模型
+    use_multi_window_pool = st.checkbox(
+        "启用多训练窗口候选池",
+        value=AppConfig.ENABLE_MULTI_WINDOW_POOL,
+        help="开启后会按配置训练多个时间窗口的模型候选，供预测阶段跨窗口筛选组合。",
+    )
     if st.button("开始训练"):
         begin_time = time.time()
         try:
@@ -28,28 +38,39 @@ def render(data_source, symbol_code, N, classifier_name, mixture_depth, oversamp
                 df_preprocessed_train = select_time(raw_data, train_start.strftime("%Y%m%d"), train_end.strftime("%Y%m%d"))
             
             with st.spinner(f"开始多轮训练，共 {num_rounds} 次..."):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+                progress_reporter = StreamlitProgressReporter()
 
                 def progress_callback(current, total, message):
-                    status_text.text(message)
-                    progress_bar.progress(current / total)
+                    progress_reporter.update(current, total, message)
 
                 training_service = TrainingService()
-                last_round_models, peak_models_list, trough_models_list = training_service.train_multiple_rounds(
-                    df_preprocessed_train,
-                    N,
-                    all_features_train,
-                    classifier_name,
-                    mixture_depth,
-                    n_features_selected if not auto_feature else 'auto',
-                    oversample_method,
-                    num_rounds=num_rounds,
-                    progress_callback=progress_callback,
-                )
+                if use_multi_window_pool:
+                    last_round_models, peak_models_list, trough_models_list = training_service.train_multiple_windows(
+                        raw_data,
+                        N,
+                        all_features_train,
+                        classifier_name,
+                        mixture_depth,
+                        n_features_selected if not auto_feature else 'auto',
+                        oversample_method,
+                        training_windows=AppConfig.TRAINING_WINDOWS,
+                        num_rounds=num_rounds,
+                        progress_callback=progress_callback,
+                    )
+                else:
+                    last_round_models, peak_models_list, trough_models_list = training_service.train_multiple_rounds(
+                        df_preprocessed_train,
+                        N,
+                        all_features_train,
+                        classifier_name,
+                        mixture_depth,
+                        n_features_selected if not auto_feature else 'auto',
+                        oversample_method,
+                        num_rounds=num_rounds,
+                        progress_callback=progress_callback,
+                    )
 
-                progress_bar.progress(1.0)
-                status_text.text("多轮训练完成！")
+                progress_reporter.finish("多轮训练完成！")
 
                 # 记录最后一次训练的模型到 session_state
                 st.session_state.models = last_round_models
@@ -59,7 +80,14 @@ def render(data_source, symbol_code, N, classifier_name, mixture_depth, oversamp
                 st.session_state.train_all_features = all_features_train
                 st.session_state.trained = True
 
-            st.success(f"多轮训练完成，共训练 {num_rounds} 组峰/谷模型。")
+            if use_multi_window_pool:
+                st.success(f"多窗口训练完成，共训练 {len(peak_models_list)} 组峰模型和 {len(trough_models_list)} 组谷模型。")
+                candidate_summary = summarize_candidate_pool_by_window(peak_models_list, trough_models_list)
+                if not candidate_summary.empty:
+                    st.markdown("#### 多窗口候选池")
+                    st.dataframe(candidate_summary, use_container_width=True, hide_index=True)
+            else:
+                st.success(f"多轮训练完成，共训练 {num_rounds} 组峰/谷模型。")
 
             # 训练可视化
             peaks = df_preprocessed_train[df_preprocessed_train['Peak'] == 1]
@@ -78,6 +106,7 @@ def render(data_source, symbol_code, N, classifier_name, mixture_depth, oversamp
             elapsed_time = end_time - begin_time
             st.success(f'训练完成，总耗时：{elapsed_time:.2f}秒')  # 显示在训练区块内
         except Exception as e:
+            logger.exception("Training page failed")
             st.error(f"训练失败: {str(e)}")
 
     if st.session_state.get('trained') and is_downloadable_model_dict(st.session_state.get('models')):
@@ -109,4 +138,5 @@ def render(data_source, symbol_code, N, classifier_name, mixture_depth, oversamp
         )
         st.plotly_chart(fig_vis, use_container_width=True, key="chart2")
     except Exception as e:
+        logger.exception("Training visualization failed")
         st.warning(f"可视化失败: {e}")

@@ -291,28 +291,30 @@ def generate_features(df_input: pd.DataFrame) -> pd.DataFrame:
     if 'Volume' not in df.columns:
         df['Volume'] = np.nan
 
+    features = {}
+
     # 日收益率 (简单涨跌幅)
-    df['Return_1d'] = df['Close'].pct_change()
+    features['Return_1d'] = df['Close'].pct_change()
     # 日对数收益
-    df['LogReturn_1d'] = np.log(df['Close'] / df['Close'].shift(1))
+    features['LogReturn_1d'] = np.log(df['Close'] / df['Close'].shift(1))
 
     # -----------------------------------------------------------------
     #  (B) 多周期 SMA / EMA
     # -----------------------------------------------------------------
     sma_windows = [5, 10, 20, 30, 60]
     for w in sma_windows:
-        df[f'SMA_{w}'] = compute_SMA(df['Close'], w)
+        features[f'SMA_{w}'] = compute_SMA(df['Close'], w)
 
     ema_windows = [5, 10, 20, 30, 60]
     for w in ema_windows:
-        df[f'EMA_{w}'] = compute_EMA(df['Close'], w)
+        features[f'EMA_{w}'] = compute_EMA(df['Close'], w)
 
     # -----------------------------------------------------------------
     #  (C) 多周期 RSI
     # -----------------------------------------------------------------
     rsi_periods = [6, 14, 21]
     for p in rsi_periods:
-        df[f'RSI_{p}'] = compute_RSI(df['Close'], period=p)
+        features[f'RSI_{p}'] = compute_RSI(df['Close'], period=p)
 
     # -----------------------------------------------------------------
     #  (D) 多种 MACD 组合
@@ -320,8 +322,8 @@ def generate_features(df_input: pd.DataFrame) -> pd.DataFrame:
     macd_sets = [(12,26,9), (8,17,9), (16,32,9)]
     for (f,s,sg) in macd_sets:
         macd, signal = compute_MACD(df['Close'], f, s, sg)
-        df[f'MACD_{f}_{s}'] = macd
-        df[f'MACDsig_{f}_{s}'] = signal
+        features[f'MACD_{f}_{s}'] = macd
+        features[f'MACDsig_{f}_{s}'] = signal
 
     # -----------------------------------------------------------------
     #  (E) 多周期 Bollinger
@@ -329,9 +331,9 @@ def generate_features(df_input: pd.DataFrame) -> pd.DataFrame:
     boll_sets = [(20,2), (20,3)]
     for (period, std) in boll_sets:
         up, mid, low = compute_Bollinger_Bands(df['Close'], period=period, num_std=std)
-        df[f'BollUp_{period}_{std}'] = up
-        df[f'BollMid_{period}_{std}'] = mid
-        df[f'BollLow_{period}_{std}'] = low
+        features[f'BollUp_{period}_{std}'] = up
+        features[f'BollMid_{period}_{std}'] = mid
+        features[f'BollLow_{period}_{std}'] = low
 
     # -----------------------------------------------------------------
     #  (F) KD / KDJ
@@ -339,142 +341,144 @@ def generate_features(df_input: pd.DataFrame) -> pd.DataFrame:
     kd_periods = [9, 14]
     for p in kd_periods:
         k, d = compute_KD(df['High'], df['Low'], df['Close'], period=p)
-        df[f'K_{p}'] = k
-        df[f'D_{p}'] = d
-        df[f'J_{p}'] = 3 * k - 2 * d
+        features[f'K_{p}'] = k
+        features[f'D_{p}'] = d
+        features[f'J_{p}'] = 3 * k - 2 * d
 
     # -----------------------------------------------------------------
     #  (G) ATR, ADX, CCI, MFI 等
     # -----------------------------------------------------------------
     atr_periods = [14, 21]
     for p in atr_periods:
-        df[f'ATR_{p}'] = compute_ATR(df['High'], df['Low'], df['Close'], p)
+        features[f'ATR_{p}'] = compute_ATR(df['High'], df['Low'], df['Close'], p)
 
     adx_periods = [14, 21]
     for p in adx_periods:
         plus_di, minus_di, adx_val = compute_ADX(df['High'], df['Low'], df['Close'], p)
-        df[f'plusDI_{p}'] = plus_di
-        df[f'minusDI_{p}'] = minus_di
-        df[f'ADX_{p}'] = adx_val
+        features[f'plusDI_{p}'] = plus_di
+        features[f'minusDI_{p}'] = minus_di
+        features[f'ADX_{p}'] = adx_val
 
     cci_periods = [14, 20, 30]
     for p in cci_periods:
-        df[f'CCI_{p}'] = compute_CCI(df['High'], df['Low'], df['Close'], period=p)
+        features[f'CCI_{p}'] = compute_CCI(df['High'], df['Low'], df['Close'], period=p)
 
     # 资金流量指标 MFI
     mfi_periods = [14, 21]
     if 'Volume' in df.columns:
         for p in mfi_periods:
-            df[f'MFI_{p}'] = compute_MFI(df['High'], df['Low'], df['Close'], df['Volume'], p)
+            features[f'MFI_{p}'] = compute_MFI(df['High'], df['Low'], df['Close'], df['Volume'], p)
     else:
         for p in mfi_periods:
-            df[f'MFI_{p}'] = np.nan
+            features[f'MFI_{p}'] = np.nan
 
     # CMF
     if 'Volume' in df.columns:
-        df['CMF_20'] = compute_CMF(df['High'], df['Low'], df['Close'], df['Volume'], 20)
+        features['CMF_20'] = compute_CMF(df['High'], df['Low'], df['Close'], df['Volume'], 20)
     else:
-        df['CMF_20'] = np.nan
+        features['CMF_20'] = np.nan
 
     # -----------------------------------------------------------------
     #  (H) Momentum, ROC, Volatility, OBV, WR
     # -----------------------------------------------------------------
     momentum_periods = [3,7,14]
     for p in momentum_periods:
-        df[f'Momentum_{p}'] = compute_momentum(df['Close'], p)
+        features[f'Momentum_{p}'] = compute_momentum(df['Close'], p)
 
     roc_periods = [5,10,20]
     for p in roc_periods:
-        df[f'ROC_{p}'] = compute_ROC(df['Close'], p)
+        features[f'ROC_{p}'] = compute_ROC(df['Close'], p)
 
     vol_periods = [5,10,20]
     for p in vol_periods:
-        df[f'Volatility_{p}'] = compute_volatility(df['Close'], p)
+        features[f'Volatility_{p}'] = compute_volatility(df['Close'], p)
 
     if 'Volume' in df.columns:
-        df['OBV'] = compute_OBV(df['Close'], df['Volume'])
+        features['OBV'] = compute_OBV(df['Close'], df['Volume'])
     else:
-        df['OBV'] = np.nan
+        features['OBV'] = np.nan
 
     wr_periods = [14, 21]
     for p in wr_periods:
-        df[f'WilliamsR_{p}'] = compute_williams_r(df['High'], df['Low'], df['Close'], period=p)
+        features[f'WilliamsR_{p}'] = compute_williams_r(df['High'], df['Low'], df['Close'], period=p)
 
     # -----------------------------------------------------------------
     #  (I) VWAP, VolumeChange
     # -----------------------------------------------------------------
     if 'Volume' in df.columns:
-        df['VWAP'] = compute_VWAP(df['High'], df['Low'], df['Close'], df['Volume'])
+        features['VWAP'] = compute_VWAP(df['High'], df['Low'], df['Close'], df['Volume'])
         for p in [5,10,20]:
-            df[f'VolumeChange_{p}'] = compute_volume_change(df['Volume'], period=p)
+            features[f'VolumeChange_{p}'] = compute_volume_change(df['Volume'], period=p)
     else:
-        df['VWAP'] = np.nan
+        features['VWAP'] = np.nan
         for p in [5,10,20]:
-            df[f'VolumeChange_{p}'] = np.nan
+            features[f'VolumeChange_{p}'] = np.nan
 
     # -----------------------------------------------------------------
     #  (J) zscore, TRIX, UO, ChaikinOsc, PPO, DPO, KST, KAMA
     # -----------------------------------------------------------------
     zscore_periods = [10, 20]
     for p in zscore_periods:
-        df[f'ZScore_{p}'] = compute_zscore(df['Close'], period=p)
+        features[f'ZScore_{p}'] = compute_zscore(df['Close'], period=p)
 
     trix_periods = [15, 30]
     for p in trix_periods:
-        df[f'TRIX_{p}'] = compute_TRIX(df['Close'], p)
+        features[f'TRIX_{p}'] = compute_TRIX(df['Close'], p)
 
-    df['UO'] = compute_ultimate_oscillator(df['High'], df['Low'], df['Close'], 7, 14, 28)
+    features['UO'] = compute_ultimate_oscillator(df['High'], df['Low'], df['Close'], 7, 14, 28)
     
     if 'Volume' in df.columns:
-        df['Chaikin_Osc'] = compute_chaikin_oscillator(df['High'], df['Low'], df['Close'], df['Volume'], 3,10)
+        features['Chaikin_Osc'] = compute_chaikin_oscillator(df['High'], df['Low'], df['Close'], df['Volume'], 3,10)
     else:
-        df['Chaikin_Osc'] = np.nan
+        features['Chaikin_Osc'] = np.nan
 
-    df['PPO'] = compute_PPO(df['Close'], fast_period=12, slow_period=26)
+    features['PPO'] = compute_PPO(df['Close'], fast_period=12, slow_period=26)
 
     dpo_windows = [20,30]
     for w in dpo_windows:
-        df[f'DPO_{w}'] = compute_DPO(df['Close'], w)
+        features[f'DPO_{w}'] = compute_DPO(df['Close'], w)
 
     kst, kst_signal = compute_KST(df['Close'], 10,15,20,30, 10,10,10,15)
-    df['KST'] = kst
-    df['KST_signal'] = kst_signal
+    features['KST'] = kst
+    features['KST_signal'] = kst_signal
 
-    df['KAMA_10'] = compute_KAMA(df['Close'], n=10, pow1=2, pow2=30)
-    df['KAMA_30'] = compute_KAMA(df['Close'], n=30, pow1=2, pow2=30)
+    features['KAMA_10'] = compute_KAMA(df['Close'], n=10, pow1=2, pow2=30)
+    features['KAMA_30'] = compute_KAMA(df['Close'], n=30, pow1=2, pow2=30)
 
     # -----------------------------------------------------------------
     #  (K) 其它价量衍生
     # -----------------------------------------------------------------
-    df['HighLow_Spread'] = compute_HighLow_Spread(df['High'], df['Low'])
+    features['HighLow_Spread'] = compute_HighLow_Spread(df['High'], df['Low'])
     pc = compute_PriceChannel(df['High'], df['Low'], df['Close'], window=20)
-    df['PC_Upper_20'] = pc['upper_channel']
-    df['PC_Mid_20'] = pc['middle_channel']
-    df['PC_Lower_20'] = pc['lower_channel']
+    features['PC_Upper_20'] = pc['upper_channel']
+    features['PC_Mid_20'] = pc['middle_channel']
+    features['PC_Lower_20'] = pc['lower_channel']
 
-    df['RenkoSlope_3'] = compute_RenkoSlope(df['Close'], bricks=3)
+    features['RenkoSlope_3'] = compute_RenkoSlope(df['Close'], bricks=3)
 
     # 用布林带 20,2 做 %B
     up_boll, mid_boll, low_boll = compute_Bollinger_Bands(df['Close'], 20, 2)
-    df['PercentB_20_2'] = compute_PercentageB(df['Close'], up_boll, low_boll)
+    features['PercentB_20_2'] = compute_PercentageB(df['Close'], up_boll, low_boll)
 
     # -----------------------------------------------------------------
     #  (L) 一些额外的交叉/衍生特征 (示例)
     # -----------------------------------------------------------------
-    df['Close_div_EMA20'] = df['Close'] / (df['EMA_20']+1e-9)
-    df['High_minus_Low'] = df['High'] - df['Low']
-    df['MACD_12_26_minus_RSI_14'] = df['MACD_12_26'] - df['RSI_14']
-    df['ATR_14_x_Volume'] = df['ATR_14'] * df['Volume']
-    df['Return_5d'] = df['Close'].pct_change(5)
+    features['Close_div_EMA20'] = df['Close'] / (features['EMA_20'] + 1e-9)
+    features['High_minus_Low'] = df['High'] - df['Low']
+    features['MACD_12_26_minus_RSI_14'] = features['MACD_12_26'] - features['RSI_14']
+    features['ATR_14_x_Volume'] = features['ATR_14'] * df['Volume']
+    features['Return_5d'] = df['Close'].pct_change(5)
 
     # 还可以多加一些 Lag/Lead
-    df['Close_lag1'] = df['Close'].shift(1)
-    df['Close_lag2'] = df['Close'].shift(2)
-    df['Volume_lag1'] = df['Volume'].shift(1)
+    features['Close_lag1'] = df['Close'].shift(1)
+    features['Close_lag2'] = df['Close'].shift(2)
+    features['Volume_lag1'] = df['Volume'].shift(1)
 
     # -----------------------------------------------------------------
     # 在返回前，对缺失值进行简单填充（或您可用其他方式处理）
     # -----------------------------------------------------------------
+    feature_df = pd.DataFrame(features, index=df.index)
+    df = pd.concat([df, feature_df], axis=1).copy()
     df.fillna(0, inplace=True)
 
     # 打印一下最终特征数量(可选)

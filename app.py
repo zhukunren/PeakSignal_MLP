@@ -1,11 +1,20 @@
 import streamlit as st
 
+from ml_trader.logging_config import get_logger, setup_logging
+
+setup_logging()
+logger = get_logger(__name__)
+
 from app.pages import finetune_page, prediction_page, training_page, upload_page
 from app.ui_helpers import (
+    install_closed_websocket_log_filter,
     inject_orientation_script,
     load_custom_css,
 )
 from app.utils.session_state import SessionStateManager
+
+
+install_closed_websocket_log_filter()
 
 
 st.set_page_config(
@@ -63,6 +72,7 @@ def render_sidebar():
 
 
 def main_product():
+    logger.info("Starting Streamlit application")
     SessionStateManager.initialize()
     inject_orientation_script()
     st.title("东吴秀享AI超额收益系统")
